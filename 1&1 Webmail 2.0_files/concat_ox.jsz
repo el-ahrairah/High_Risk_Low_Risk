@@ -1,0 +1,2834 @@
+/**
+ *
+ * All content on this website (including text, images, source
+ * code and any other original works), unless otherwise noted,
+ * is licensed under a Creative Commons License.
+ *
+ * http://creativecommons.org/licenses/by-nc-sa/2.5/
+ *
+ * Copyright (C) Open-Xchange Inc., 2006-2012
+ * Mail: info@open-xchange.com
+ *
+ * @author Jan Finsel <jan.finsel@open-xchange.com>
+ *
+ */
+
+var hidetreeelements = {};
+var menupluginelementtree = {};
+var menupluginelementsavailable = {};
+
+function MenuNodes() {}
+MenuNodes.contexts = {};
+MenuNodes.DYNAMIC=null;
+MenuNodes.FIXED=null;
+register("Loaded",function() {
+    MenuNodes.DYNAMIC = {};
+    MenuNodes.FIXED = {};
+});
+
+MenuNodes.Section = function(id, text, index, dynamic) {
+    if (MenuNodes.Section.sections[id]) {
+        return MenuNodes.Section.sections[id];
+    }
+    MenuNodes.Section.sections[id] = this;
+    this.id = id;
+    this.children = [];
+    this.menu = MenuNodes.createSmallButtonContext(this.id, text,
+        "MenuNodes.Section");
+};
+MenuNodes.Section.prototype.add = function(button) {
+    this.children.push(button);
+    button.addTo(this);
+    this.update();
+};
+MenuNodes.Section.prototype.update = function() {
+    if (this.menu.node.parent) this.menu.node.parent.validate();
+};
+MenuNodes.Section.prototype.show = function(view) {
+    changeDisplay(view, this.id);
+    if (   currentfullpath == view
+        || String(currentfullpath).substring(0, view.length + 1) == view + "/")
+    {
+        this.update();
+    }
+};
+MenuNodes.Section.prototype.hide = function(view) {
+    changeDisplay(view, this.id, true);
+};
+MenuNodes.Section.update = function() {
+    for (var i in MenuNodes.Section.sections) {
+        MenuNodes.Section.sections[i].update();
+    }
+};
+MenuNodes.Section.sections = {};
+
+menuarrows["MenuNodes.Section"] = {};
+register("OX_SELECTED_ITEMS_CHANGED", MenuNodes.Section.update);
+register("OX_menu_Change_Height", MenuNodes.Section.update);
+register("OX_Switched", MenuNodes.Section.update);
+
+MenuNodes.Button = function(text) {
+    this.text = text;
+    var Self = this;
+    this.click_cb = function() { if (Self.click) { Self.click(); } };
+    this.disabledClick_cb = function() {
+        if (Self.disabledClick) {
+            Self.disabledClick();
+        }
+    };
+};
+MenuNodes.Button.prototype.addTo = function(section) {
+    this.section = section;
+    this.id = "MenuNodes.Button." + MenuNodes.Button.id++; 
+    this.button = MenuNodes.createSmallButton(section.menu, this.id, this.text,
+        MenuNodes.imageURL(this.icon), MenuNodes.imageURL(this.disabledIcon),
+        this.click_cb, this.disabledClick_cb);
+};
+MenuNodes.Button.prototype.setEnabled = function(enabled) {
+    this.button.setEnabled(Boolean(enabled));
+};
+MenuNodes.Button.prototype.getEnabled = function() {
+    return this.button.isEnabled();
+};
+MenuNodes.Button.id = 0;
+MenuNodes.imageURL = function(url) {
+    if (url.charAt(0) == "/") {
+        return urlify(url.substring(1));
+    }
+    return getFullImgSrc(url);
+};
+
+MenuNodes.undoTheme = function(path) {
+    if (!MenuNodes.themeRegExp) {
+        MenuNodes.themeRegExp = new RegExp("^" +
+            escapeRegExp(getFullImgSrc("")) + "(.*)$");
+    }
+    return path.replace(MenuNodes.themeRegExp, "$1");
+};
+
+MenuNodes.createBigButtonContext = function (id, title, icon, action) {
+    var section = new ox.gui.PanelMenuSection(title);
+    var item = ox.widgets.toolBar.menuItems[id] = new ox.gui.MenuItem({
+        id: id,
+        title: title instanceof I18nString ? title : _(title),
+        icons: [MenuNodes.undoTheme(icon)],
+        big: true,
+        action: action
+    });
+    section.add(item);
+    return item;
+};
+MenuNodes.createSmallButtonContext = function(id, title, module) {
+    if (MenuNodes.contexts[id]) return MenuNodes.contexts[id];
+    return MenuNodes.contexts[id] =
+        { node: new ox.gui.PanelMenuSection(title) };
+};
+MenuNodes.createSmallButton = function(context, id, title, icon, disabledIcon,
+                                       action, disabled_action)
+{
+    var button = new ox.gui.MenuItem({
+        id: id,
+        title: title instanceof I18nString ? title : _(title),
+        pathPrefix: MenuNodes.undoTheme(icon) == icon ? "" : undefined,
+        icons: disabledIcon ? [MenuNodes.undoTheme(icon),
+                               MenuNodes.undoTheme(disabledIcon)]
+                            : [MenuNodes.undoTheme(icon)],
+        action: function() {
+            if (button.isEnabled()) {
+                action.apply(this, arguments);
+                return true; // action taken
+            } else if (disabled_action) {
+                disabled_action.apply(this, arguments);
+                return true; // action taken
+            } else {
+                return false; // no action
+            }
+        }
+    });
+    context.node.add(button);
+    return button;
+};
+addMenuNode = emptyFunction;
+
+function menu_display_contents(module,modulecontent,enabled, id) {
+    if (modulecontent in MenuNodes.contexts) {
+        MenuNodes.contexts[modulecontent].node.each(function(button) {
+            if (button.id == id) button.setEnabled(Boolean(enabled));
+        });
+        return;
+    }
+}
+
+function addHideTreeNode(node, parent) {
+    if (node && parent) {
+        var tmpObject = {
+            node: node,
+            parent: parent
+        };
+        hidetreeelements[node.id] = tmpObject;
+        try {
+            parent.removeChild(node);
+        } catch (e) {
+            // pssst
+        }
+    } else {
+        if (debug) {
+            console.error("addHideTreeNode(node, parent). Empty parameter! ", node, parent);
+        }
+    }
+}
+function appendNode(id,cd2) {
+    var mynode =hidetreeelements[id];
+    if(mynode) {
+        if(!menupluginelementsavailable[id]) {
+            mynode.parent.appendChild(mynode.node);    
+        } else {
+            var nodeafter=null;
+            for(var i=0;i<mynode.parent.childNodes.length;i++) {
+                nodeafter=mynode.parent.childNodes[i];
+                if(nodeafter.nodeType==1) {
+                    if(nodeafter.id) {
+                        if(menupluginelementsavailable[nodeafter.id] && menupluginelementsavailable[nodeafter.id].index !== undefined) {
+                            if(mynode.index<=menupluginelementsavailable[nodeafter.id].index) { break; }
+                        } else { break; }
+                    } else { break; }
+                }
+            }
+            mynode.parent.insertBefore(mynode.node,nodeafter);
+        }
+        if(!cd2 && (mynode.node.style.display=="none" || mynode.node.style.display=="NONE")) {
+            if(mynode.node.tagName == "DIV") { mynode.node.style.display = "block"; }
+            else { mynode.node.style.display = ""; }
+        }
+    } else if ($ALL(id)) {
+        if(!cd2 && ($ALL(id).style.display=="none" || $ALL(id).style.display=="NONE")) {
+            if($ALL(id).tagName == "DIV") { $ALL(id).style.display = "block"; }
+            else { $ALL(id).style.display = ""; }
+        }
+    }
+    refillImages(id);
+}
+function refillImages(id) {
+    if($ALL(id)) {
+        var elements=$ALL(id).getElementsByTagName("img");
+        for(var i=0;i<elements.length;i++) {
+            //if(init.images[elements[i].id] && init.images[elements[i].id] != elements[i].src && (!elements[i].src || elements[i].src.match(/img\/dummy.gif/))) {
+            if(init.images[elements[i].id] && init.images[elements[i].id] != elements[i].src) {
+                elements[i].src=init.images[elements[i].id];
+            }
+        }
+    }
+}
+function removeNode(id,cd2) {
+    var mynode =hidetreeelements[id];
+    if(mynode) { 
+        try {
+            mynode.parent.removeChild(mynode.node);
+            if(!cd2 && (mynode.node.style.display!="none" || mynode.node.style.display!="NONE")) {
+                mynode.node.style.display = "none";
+            }    
+        } catch (e) {}
+    } else if ($ALL(id)) {
+        if(!cd2 && ($ALL(id).style.display!="none" || $ALL(id).style.display!="NONE")) {
+            $ALL(id).style.display = "none"; 
+        }
+    }
+}
+function showNode(id,changedisplay) {
+    appendNode(id,changedisplay);
+}
+function hideNode(id,changedisplay) {
+    removeNode(id,changedisplay);
+}
+function rebuildTree() {
+    // vars
+    var contentArea = $("contentarea"),
+        configComplete = $("configComplete"),
+        everything = $("everything");
+    
+    addHideTreeNode(everything, $("testit3333"));
+    addHideTreeNode($("portal"), contentArea);
+    
+    if (configGetKey("modules.mail.module")) {
+        addHideTreeNode($("mail.list"), contentArea);
+        addHideTreeNode($("mail.hsplit"), contentArea);
+        addHideTreeNode($("mail.vsplit"), contentArea);
+    }
+    if (configGetKey("modules.calendar.module")) {
+        addHideTreeNode($("calendarTeamDay"), contentArea);
+        addHideTreeNode($("calendarWorkweek"), contentArea);
+        addHideTreeNode($("calendarWeek"), contentArea);
+        addHideTreeNode($("calendarMonth"), contentArea);
+        addHideTreeNode($("calendarAppointmentDetail"), contentArea);
+        addHideTreeNode($("calendarList"), contentArea);
+    }
+    if (configGetKey("modules.contacts.module")) {
+        addHideTreeNode($("contacts"), contentArea);
+        addHideTreeNode($("contactCards"), contentArea);
+        addHideTreeNode($("contactsList"), contentArea);
+        addHideTreeNode($("contactDetails"), contentArea);
+    }
+    if (configGetKey("modules.infostore.module")) {
+        addHideTreeNode($("infostore_list"), contentArea);
+        addHideTreeNode($("infostore_split"), contentArea);
+    }
+    if (configGetKey("modules.tasks.module")) {
+        addHideTreeNode($("taskslist"), contentArea);
+        addHideTreeNode($("taskssplit"), contentArea);
+    }
+    if (configGetKey("modules.messaging.module")) {
+        addHideTreeNode($("messaging"), contentArea);
+    }
+    addHideTreeNode($("folder_props"), contentArea);
+    addHideTreeNode($("config"), configComplete);
+    addHideTreeNode($("config_tags"), configComplete);
+    addHideTreeNode($("config_import"), configComplete);
+    addHideTreeNode($("config_calendar_team"), configComplete);
+    addHideTreeNode($("config_calendar"), configComplete);
+    addHideTreeNode($("config_contact"), configComplete);
+    addHideTreeNode($("config_infostore"), configComplete);
+    addHideTreeNode($("config_mail_signatures"), configComplete);
+    addHideTreeNode($("config_mail"), configComplete);
+    addHideTreeNode($("config_portal"), configComplete);
+    addHideTreeNode($("config_tasks"), configComplete);
+    addHideTreeNode($("modal-dialog"), everything);
+    addHideTreeNode($("disable_confirm_window"), $("modal-dialog"));
+    addHideTreeNode($("alert_window"), $("disable_confirm_window"));
+    addHideTreeNode($("create_window"), $("disable_confirm_window"));
+    addHideTreeNode($("conflict_window"), $("disable_confirm_window"));
+    addHideTreeNode($("rightshandling_window"), $("modal-dialog"));
+    addHideTreeNode($("acceptdeny_object"), everything);
+    addHideTreeNode($("global_about"), $("modal-dialog"));
+    addHideTreeNode($("subscribe_folder"), $("modal-dialog"));
+    addHideTreeNode($("floatingdivParticipants"), everything);
+    addHideTreeNode($("reminderWindow"), everything);
+    
+    autorefill();
+}
+function autorefill() {    
+    showNode("menu_options_menu");
+    showNode("configComplete");
+}
+function changeImgPath(newPath) {
+    for (var i in init.images) {
+        init.images[i] = init.images[i].replace(/\/default\//g, "/"+newPath+"/");
+    }
+}
+register("Loaded",rebuildTree);
+/**
+ *
+ * All content on this website (including text, images, source
+ * code and any other original works), unless otherwise noted,
+ * is licensed under a Creative Commons License.
+ *
+ * http://creativecommons.org/licenses/by-nc-sa/2.5/
+ *
+ * Copyright (C) Open-Xchange Inc., 2006-2012
+ * Mail: info@open-xchange.com
+ *
+ * @author Jan Finsel <jan.finsel@open-xchange.com>
+ * @author Stefan Preuss <stefan.preuss@open-xchange.com>
+ *
+ */
+
+function OXGroupwareHover() {}
+OXGroupwareHover.uid = 0;
+OXGroupwareHover.references=new Object();
+OXGroupwareHover.start = function () {
+	if(!OXGroupwareHover.references["core_attachments_template"]) {
+		var tmpnode=$("template_calendar_hover_attachments");
+		OXGroupwareHover.references["core_attachments_template"]=tmpnode;
+	}
+	/*
+	if(!OXGroupwareHover.references["core_links_template"]) {
+		var tmpnode=$("template_calendar_hover_links"); //.cloneNode(true);
+		//$("template_calendar_hover_links").parentNode.removeChild($("template_calendar_hover_links"));
+		tmpnode.id="";
+		OXGroupwareHover.references["core_links_template"]=tmpnode;
+	}
+	*/
+	if(!OXGroupwareHover.references["core_content_full"]) {
+		var tmpnode=$("template_calendar_hover_page_content_full");
+		OXGroupwareHover.references["core_content_full"]=tmpnode;
+	}
+};
+
+OXGroupwareHover.openAttachedFile = function(folderid,objectid,filename,rtfflag,attachmentid,module) {
+	return function() {
+		if(rtfflag) { return; }
+		var sURL = AjaxRoot + "/attachment/" + encodeURIComponent(filename) 
+		    + "?action=document&session=" + session + "&attached=" + objectid
+		    + "&module=" + module + "&folder=" + folderid + "&id=" + attachmentid;
+		newWindow(sURL, getWindowOptions(null, null, "scrollbars=yes"));
+	};
+};
+
+OXGroupwareHover.saveAttachedFile = function(folderid,objectid,filename,rtfflag,attachmentid,module) {
+	return function() {	
+		if(rtfflag) return;
+		var sContentType = 'application%2Foctet-stream';	
+		var sURL = 	AjaxRoot + "/attachment/" + encodeURIComponent(filename) 
+		    + "?action=document&session="+ session + "&attached=" + objectid  
+		    + "&module=" + module + "&folder=" + folderid + "&id=" + attachmentid + "&content_type=" + sContentType;
+		var frame = $ALL("dlIframe") ? getFrameElement('dlIframe') : parent.frames['dlIframe'];
+		frame.location.href = sURL;
+	};
+};
+
+OXGroupwareHover.followLink = function (module,folder,id) {
+	return function() {
+		triggerEvent("OX_Direct_Linking",module,{ folder : folder , id : id });
+	}
+}
+OXGroupwareHover.fillAttachments = function(Hover) {
+
+	Hover.accordion.removeComponent("Attachments");
+	var attachmentfirst=
+	newnode("tr",{},{},[
+		newnode("td",{ width: "25px", paddingTop:"12px", lineHeight : "0px"},{ className: "notclickable"},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]) 
+		]),
+		newnode("td",{ paddingTop:"12px", overflow: "hidden", textOverflow: "ellipsis" },{ className : "contenttext notclickable"},[]),
+		newnode("td",{ width: "25px", paddingTop:"12px" , lineHeight : "0px", textAlign: "right"},{ className: "clickable" },[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]),
+			newnode("img",{ display:"none" },{ src: getFullImgSrc("img/menu/attachment_open.gif") },[])
+		]),
+		newnode("td",{ width: "25px", paddingTop:"12px" , lineHeight : "0px", textAlign: "right" },{ className: "clickable"},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]),
+			newnode("img",{ display:"none" },{ src: getFullImgSrc("img/menu/attachment_save.gif") },[])
+		])
+	]);
+	var attachmentsecond=
+	newnode("tr",{},{},[
+		newnode("td",{ width: "25px" },{ className: "notclickable"},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[])
+		]),
+		newnode("td",{ overflow: "hidden", textOverflow: "ellipsis" },{ className : "contenttext notclickable"},[]),
+		newnode("td",{ width: "25px", textAlign: "right" },{ className: "notclickable"},[]),
+		newnode("td",{ width: "25px", textAlign: "right" },{ className: "notclickable"},[])
+	]);
+	var attachmentmain=OXGroupwareHover.references["core_attachments_template"].cloneNode(true);
+	attachmentmain.id += ++OXGroupwareHover.uid;
+	var attachbody=attachmentmain.getElementsByTagName("tbody")[0];
+	if(!(Hover.actualobject.number_of_attachments>0)) {
+		var tmp=newnode("tr",{},{},[
+			newnode("td",{ width: "25px"},{},[
+				newnode("img",{ className: "notclickable" },{ src: getFullImgSrc("img/dummy.gif") },[])
+			]),
+			newnode("td",{},{ colspan : 4 , className : "contenttext notclickable" },[
+				document.createTextNode(_("No attachments available")) /*i18n*/
+			])		
+		]);
+		attachbody.appendChild(tmp);
+	} else {
+		(new JSONX()).get(AjaxRoot + "/attachment?action=all&session=" + session + "&folder=" + Hover.actualobject.folder_id +
+			"&attached=" + Hover.actualobject.id + "&module="+Hover.moduleint+"&columns=1,801,802,803,804,805,806&sort=803&order=asc",null,
+			function(attachments) {				
+				attachments=attachments.data || [];
+				
+				var _txt = _("Attachments") + " (" + attachments.length + ")";
+				switch(Hover.actualmodule) {
+					case "calendar":
+					    if (OXAppointmentHover.slider.getTabById("attachments") !== null) {
+					        OXAppointmentHover.slider.getTabById("attachments").setTitle(_txt);
+					    }
+						break;
+					case "tasks":
+					    if (OXTaskHover.slider.getTabById("attachments") !== null) {
+					        OXTaskHover.slider.getTabById("attachments").setTitle(_txt);
+					    }
+						break;
+					case "contacts":
+					    if (OXContactHover.slider.getTabById("attachments") !== null) {
+					        OXContactHover.slider.getTabById("attachments").setTitle(_txt);
+					    }
+						break;
+				}
+				
+				for(var i=0;i<attachments.length;i++) {
+					var node=attachmentfirst.cloneNode(true);
+					var node2=attachmentsecond.cloneNode(true);
+					var attachmentid=attachments[i][0];
+					var module=attachments[i][2];
+					var image=getMimeImage(attachments[i][5]);
+					var imagetitle=attachments[i][5];
+					var bytesize=attachments[i][4];
+					var attachmentname=attachments[i][3];
+					var imagertf=attachments[i][6];
+					node.getElementsByTagName("img")[0].src=image; 
+					node.getElementsByTagName("img")[0].title=imagetitle;
+					if(!imagertf) {
+					    node.getElementsByTagName("td")[1].title = attachmentname;
+						node.getElementsByTagName("td")[1].appendChild(document.createTextNode(attachmentname));
+						node.getElementsByTagName("img")[1].style.display="none";
+						node.getElementsByTagName("img")[2].style.display="";
+						node.getElementsByTagName("img")[2].title=_("Open attachment"); /*i18n*/
+						addDOMEvent(node.getElementsByTagName("img")[2],"click",OXGroupwareHover.openAttachedFile(Hover.actualobject.folder_id,Hover.actualobject.id,attachmentname,imagertf,attachmentid,module));
+						node.getElementsByTagName("img")[3].style.display="none";
+						addDOMEvent(node.getElementsByTagName("img")[4],"click",OXGroupwareHover.saveAttachedFile(Hover.actualobject.folder_id,Hover.actualobject.id,attachmentname,imagertf,attachmentid,module));
+						node.getElementsByTagName("img")[4].style.display="";
+						node.getElementsByTagName("img")[4].title=_("Save attachment"); /*i18n*/
+					} else {
+					    node.getElementsByTagName("td")[1].title = attachmentname;
+						node.getElementsByTagName("td")[1].appendChild(document.createTextNode(attachmentname));
+					}
+					node2.getElementsByTagName("td")[1].appendChild(document.createTextNode(OXGroupwareHover.getShortByteString(bytesize)));
+					node2.getElementsByTagName("td")[1].title=OXGroupwareHover.getShortByteString(bytesize,true);
+					attachbody.appendChild(node);
+					attachbody.appendChild(node2);
+				}
+				Hover.accordion.checkComponentHeight("Attachments");
+			}
+		);
+	}
+
+	Hover.accordion.addComponent("Attachments",attachmentmain,false);
+}
+OXGroupwareHover.getShortByteString=function(int1,onlybytes) {
+	return bytesToString(int1);
+}
+				
+function OXOperationHover() {}
+OXOperationHover.start = function() {
+	if(!OXOperationHover.references["core_participants_participant_template"]) {
+		var tmpnode=$("template_calendar_hover_participants");
+		OXOperationHover.references["core_participants_participant_template"]=tmpnode;
+	}
+	if(!OXOperationHover.references["core_participants_groupparticipants_template"]) {
+		var tmpnode=$("template_calendar_hover_groupparticipants");
+		OXOperationHover.references["core_participants_groupparticipants_template"]=tmpnode;
+	}
+	if(!OXOperationHover.references["core_participants_confirmdialog_template"]) {
+		var tmpnode=$("template_calendar_participants_confirmdialog");
+		OXOperationHover.references["core_participants_confirmdialog_template"]=tmpnode;
+	}
+}
+OXOperationHover.references=new Object();
+OXOperationHover.decline= function(Hover) {
+	OXOperationHover.dialogRequest(2,Hover);
+	OXOperationHover.hideDialog(Hover);
+}
+OXOperationHover.tentiative= function(Hover) {
+	OXOperationHover.dialogRequest(3,Hover);
+	OXOperationHover.hideDialog(Hover);
+}
+OXOperationHover.accept= function(Hover) {
+	OXOperationHover.dialogRequest(1,Hover);
+	OXOperationHover.hideDialog(Hover);
+}	
+OXOperationHover.dialogRequest = function(confirmstatus,Hover) {
+	(new JSONX).put(AjaxRoot + "/"+Hover.actualmodule+"?session="+session
+			+"&action=confirm&id="+Hover.actualobject.id+"&folder="+Hover.actualobject.folder_id, 
+		{ "confirmation": confirmstatus, "confirmmessage": Hover.references["ConfirmDialogInput"].value  },
+		null,
+		function(reply) {
+			Hover.refillContent(Hover.actualobject.id,Hover.actualobject.folder_id,Hover.actualobject.recurrence_position); 
+			storageCache.update();
+		});
+}
+OXOperationHover.hideDialog= function(Hover) {
+	Hover.accordion.hideExtraContent("ConfirmDialog");
+	Hover.confirmdialogshown=false;
+}
+OXOperationHover.getParticipantsString= function(Hover) {
+	var tmpstring="ParticipantsUsers";
+	for(var i=0;i<Hover.references.allGroups.length;i++) {
+		tmpstring+=","+Hover.references.allGroups[i];
+	}
+	return tmpstring;
+}	
+OXOperationHover.fillParticipants = function(Hover) {
+	Hover.accordion.removeComponent("ConfirmDialog");
+	Hover.accordion.removeComponent("ParticipantsUsers")
+	var participants=Hover.actualobject.participants;
+	var users=Hover.actualobject.users;
+	var confirmations = Hover.actualobject.confirmations;
+	var confMap = {};
+	if (confirmations) {
+    	for (var i = 0; i < confirmations.length; i++) {
+    	    confMap[confirmations[i].mail] = confirmations[i];
+    	};
+	}
+	
+	var confirmationClasses = {
+	    1: "appointmentACCEPTED",
+	    2: "appointmentDECLINED",
+	    3: "appointmentTENTATIVE"
+	};
+	
+	var tmp_participants=new Array();
+	var checked_confirm=new Object();
+	for(var i=0;i<participants.length;i++) {
+		if(participants[i].type!=5) {
+			tmp_participants.push(participants[i]);
+		}
+	}
+	for(var i=0;i<users.length;i++) {
+		if(users[i].id) {
+			checked_confirm[users[i].id]={ confirm : users[i].confirmation , message : users[i].confirmmessage };
+		}
+	}
+	internalCache.getObjects(tmp_participants,function(data) {
+		var tmp_node=newnode("tr", null, null, [
+			newnode("td", { width: "25px", whiteSpace: "nowrap" }, { className: "notclickable" }, []),
+			newnode("td", { width: "35%", whiteSpace: "nowrap", paddingLeft: "5px" }, { className: "contenttextnocolor notclickable"},[]),
+			newnode("td", 0, { className: "notclickable" }, [ newnode("div", { overflow: "hidden", whiteSpace: "nowrap", paddingLeft: "7px"}, { className : "contenttextnocolor" }, []) ])
+		]);
+		var tmp_node2=newnode("tr",null,null,[
+			newnode("td",{ width: "25px" },{className : "notclickable"},[
+			]),
+			newnode("td",{ width: "25px" },{className : "clickable"},[
+				newnode("img",{},{ src: getFullImgSrc("img/plus.gif") },[])
+			]),
+			newnode("td",0,{ className : "contenttextnocolor notclickable"},[])
+		]);
+		
+		var tmp_users=new Array();
+		var tmp_groups=new Array();
+		var tmp_ressources=new Array();
+		var tmp_external=new Array();
+		for(var i=0;i<participants.length;i++) {
+			switch(participants[i].type) {
+				case 1:
+					var tmpvalue=data[participants[i].id];
+					tmpvalue.confirm=checked_confirm[tmpvalue.id].confirm || 0;
+					tmpvalue.message=checked_confirm[tmpvalue.id].message || "";
+					tmp_users.push(tmpvalue);
+					break;	
+				case 2:
+					var tmpvalue=data[participants[i].id];
+					tmp_groups.push(tmpvalue);
+					break;
+				case 3:
+					var tmpvalue=data[participants[i].id];
+					tmp_ressources.push(tmpvalue);
+					break;
+				case 5:
+					tmp_external.push(participants[i]);
+					break;
+				
+			}
+		}
+		
+		tmp_users.sort(function(a,b){
+			if (a.display_name && b.display_name) {
+				return a.display_name.toLowerCase() < b.display_name.toLowerCase() ? -1 : 1;
+			} else {
+				return -1;
+			}
+		});
+		
+		var usersnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+		usersnode.id += ++OXGroupwareHover.uid;
+		var node=usersnode.getElementsByTagName("tbody")[0];
+		node.appendChild(
+			newnode("tr",{ fontWeight: "bold"}, { className: "contenttext notclickable" },[
+				newnode("td",{ paddingTop:"7px" },{colSpan : 2, className: "notclickable" }, [
+					addTranslated(_("Participants"))
+				]),
+				newnode("td",{ width : "30px", paddingTop:"7px" , paddingRight: "10px" },{ colSpan: 2, title : _("Change confirmation") , className: "clickable"}, [
+					newnode("img",{},{ src : getFullImgSrc("img/menu/global_confirmation_change.gif") })
+				])
+			])	
+		);
+		Hover.confirmdialogshown=false;
+		addDOMEvent(node.getElementsByTagName("td")[1],"click",function() {
+			if(Hover.confirmdialogshown) {
+				Hover.accordion.hideExtraContent("ConfirmDialog");
+				Hover.confirmdialogshown=false;
+			} else {
+				Hover.accordion.showExtraContent("ConfirmDialog");
+				Hover.confirmdialogshown=true;
+			}
+		});
+		if(checked_confirm[configGetKey("identifier")] && !Hover.disableConfirmation) {
+			node.getElementsByTagName("td")[1].style.display="";
+			var personalnode=OXOperationHover.references["core_participants_confirmdialog_template"].cloneNode(true);
+			personalnode.id += ++OXGroupwareHover.uid;
+			Hover.references["ConfirmDialogInput"]=personalnode.getElementsByTagName("input")[0];
+			Hover.references["ConfirmDialogInput"].value=checked_confirm[configGetKey("identifier")].message || "";
+			var newtd=personalnode.getElementsByTagName("td")[2];
+			addDOMEvent(newtd.getElementsByTagName("td")[0],"click",function() { OXOperationHover.accept(Hover)} );
+			addDOMEvent(newtd.getElementsByTagName("td")[1],"click",function() { OXOperationHover.decline(Hover)} );
+			addDOMEvent(newtd.getElementsByTagName("td")[2],"click",function() { OXOperationHover.tentiative(Hover)} );
+			Hover.accordion.addComponent("ConfirmDialog",personalnode,false);
+		} else {
+			node.getElementsByTagName("td")[1].style.display="none";
+		}
+		
+		//USERS
+		for(var i=0;i<tmp_users.length;i++) {
+			var tmpn1=tmp_node.cloneNode(true);
+			if(i==0) {
+				tmpn1.getElementsByTagName("td")[0].style.paddingTop="10px";
+				tmpn1.getElementsByTagName("td")[1].style.paddingTop="10px";
+				tmpn1.getElementsByTagName("td")[2].style.paddingTop="10px";
+			}
+			tmpn1.getElementsByTagName("td")[0].appendChild(newnode("img",null,{src: getFullImgSrc("img/calendar/user.gif") },[]));
+			tmpn1.getElementsByTagName("td")[1].appendChild(document.createTextNode(tmp_users[i].display_name
+			        + (Hover.actualobject.organizerId === tmp_users[i].id ? " (" + _("Organizer") + ")" : "") ));
+			tmpn1.getElementsByTagName("td")[1].className="notclickable";
+			switch(tmp_users[i].confirm) {
+				case 1: 
+					tmpn1.className="appointmentACCEPTED";
+					break;
+				case 2: 
+					tmpn1.className="appointmentDECLINED";
+					break;
+				case 3: 
+					tmpn1.className="appointmentTENTATIVE";
+					break;
+			}
+			if(tmp_users[i].message) {
+				tmpn1.title=tmp_users[i].message;
+			}
+			tmpn1.getElementsByTagName("td")[2].firstChild.appendChild(document.createTextNode(tmp_users[i].message || ""));
+			node.appendChild(tmpn1);
+		}
+		if(participants.length==0) {
+			var tmp=newnode("tr",{},{},[
+				newnode("td",{ width: "25px"},{ className : "notclickable"},[
+					newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[])
+				]),
+				newnode("td",{},{ colspan : 4 , className : "contenttext notclickable" },[
+					document.createTextNode(_("No participants available")) /*i18n*/
+				])		
+			]);
+			node.appendChild(tmp);
+		}
+		Hover.accordion.addComponent("ParticipantsUsers",usersnode,false);
+		for(var i=0;i<Hover.references.allGroups.length;i++){
+			Hover.accordion.removeComponent(i);	
+		}
+		for(var i in Hover.references.allGroupsParticipants.length){
+			Hover.accordion.removeComponent(i);	
+		}
+		Hover.references.allGroups=new Array();
+		Hover.references.allGroupsParticipants=new Object();
+		
+		//GROUPS
+		for(var i=0;i<tmp_groups.length;i++) {
+			var accordionnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+			accordionnode.id += ++OXGroupwareHover.uid;
+			var tmpn1=tmp_node2.cloneNode(true);
+			if(i==0) {
+				tmpn1.getElementsByTagName("td")[0].style.paddingTop="10px";
+				tmpn1.getElementsByTagName("td")[1].style.paddingTop="10px";
+				tmpn1.getElementsByTagName("td")[2].style.paddingTop="10px";
+			}
+			tmpn1.getElementsByTagName("td")[0].appendChild(newnode("img",null,{src: getFullImgSrc("img/calendar/group.gif") },[]))
+			tmpn1.getElementsByTagName("td")[2].appendChild(document.createTextNode(tmp_groups[i].display_name));
+			tmpn1.getElementsByTagName("td")[2].className="notclickable";
+			accordionnode.getElementsByTagName("tbody")[0].appendChild(tmpn1);
+			Hover.accordion.addComponent("ParticipantsGroups"+i,accordionnode,false);
+			Hover.references.allGroups.push("ParticipantsGroups"+i);
+			
+			//MEMBERS IN GROUPS
+            var accordionnode2=OXOperationHover.references["core_participants_groupparticipants_template"].cloneNode(true);
+            accordionnode2.id += ++OXGroupwareHover.uid;
+            Hover.accordion.addComponent("ParticipantsGroupUsers"+i+"members",accordionnode2,false);
+            Hover.references.allGroupsParticipants["ParticipantsGroupUsers"+i+"members"]=new Object();
+            Hover.references.allGroupsParticipants["ParticipantsGroupUsers"+i+"members"].active=false;
+	
+			internalCache.getUsers(tmp_groups[i].members,(
+			function(mynode,mynode2,mynode2name,tmpn1) { return function(cb) { 
+				addDOMEvent(mynode,"click",function() {
+					if(Hover.references.allGroupsParticipants[mynode2name]) {
+						if(Hover.references.allGroupsParticipants[mynode2name].active) {
+							mynode.getElementsByTagName("img")[0].src= getFullImgSrc("img/plus.gif");
+							Hover.accordion.hideExtraContent(mynode2name);
+							Hover.references.allGroupsParticipants[mynode2name].active=false;
+						} else {
+							mynode.getElementsByTagName("img")[0].src= getFullImgSrc("img/minus.gif");
+							Hover.accordion.showExtraContent(mynode2name);
+							Hover.references.allGroupsParticipants[mynode2name].active=true;
+						}
+					}
+				});
+				
+				var node1=mynode2.getElementsByTagName("td")[1];
+				removeChildNodes(node1);
+				
+				var count=0;
+				var tmpstring =_("No Members");
+				for (var i in cb) {
+					if (count==0) {
+						tmpstring = cb[i].display_name
+						    + (Hover.actualobject.organizerId === cb[i].id ? " (" + _("Organizer") + ")" : "");
+						count++;
+					} else {
+						tmpstring = "; " + cb[i].display_name
+						+ (Hover.actualobject.organizerId === cb[i].id ? " (" + _("Organizer") + ")" : "");
+						count++;
+					}
+					var mNode = newnode("span", 0, { className: "notclickable" }, []);
+					for (var u in users) {
+						if (users[u].id == cb[i].id) {
+							switch(users[u].confirmation) {
+								case 1: 
+									mNode.className="appointmentACCEPTED";
+									break;
+								case 2: 
+									mNode.className="appointmentDECLINED";
+									break;
+								case 3: 
+									mNode.className="appointmentTENTATIVE";
+								break;
+							}
+							mNode.title = users[u].confirmmessage || "";
+							break;
+						}
+					}
+					mNode.appendChild(document.createTextNode(tmpstring))
+					node1.appendChild(mNode);
+				}
+			} })(tmpn1.getElementsByTagName("td")[1],accordionnode2,"ParticipantsGroupUsers"+i+"members"));
+		}
+		if(tmp_ressources.length) {
+			for(var i=0;i<tmp_ressources.length;i++) {
+				var accordionnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+				accordionnode.id += ++OXGroupwareHover.uid;
+				var tmpn1=tmp_node.cloneNode(true);
+				if(i==0) {
+					tmpn1.getElementsByTagName("td")[0].style.paddingTop="10px";
+					tmpn1.getElementsByTagName("td")[1].style.paddingTop="10px";
+				}
+				tmpn1.getElementsByTagName("td")[0].appendChild(newnode("img",null,{src: getFullImgSrc("img/calendar/ressourcen.gif")},[]))
+				tmpn1.getElementsByTagName("td")[1].appendChild(document.createTextNode(tmp_ressources[i].display_name));
+				tmpn1.getElementsByTagName("td")[1].className="notclickable";
+				accordionnode.getElementsByTagName("tbody")[0].appendChild(tmpn1);
+				Hover.accordion.addComponent("ParticipantsRessources"+i,accordionnode,false);
+				Hover.references.allGroups.push("ParticipantsRessources"+i);		
+			}
+		}	
+		if(tmp_external.length) {
+			for(var i=0;i<tmp_external.length;i++) {
+				var accordionnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+				accordionnode.id += ++OXGroupwareHover.uid;
+				var tmpn1=tmp_node.cloneNode(true);
+				if(i==0) {
+					tmpn1.getElementsByTagName("td")[0].style.paddingTop="10px";
+					tmpn1.getElementsByTagName("td")[1].style.paddingTop="10px";
+                    tmpn1.getElementsByTagName("td")[2].style.paddingTop="10px";
+				}
+				tmpn1.getElementsByTagName("td")[0].appendChild(newnode("img",null,{src: getFullImgSrc("img/calendar/user_extern.gif")},[]));
+				tmpn1.getElementsByTagName("td")[1].appendChild(document.createTextNode((tmp_external[i].display_name || tmp_external[i].mail || _("Unknown"))
+				        + (Hover.actualobject.organizer === tmp_external[i].mail ? " (" + _("Organizer") + ")" : "") ));
+				tmpn1.getElementsByTagName("td")[1].className="notclickable";
+                if (confirmations) {
+                    var conf = confMap[tmp_external[i].mail];
+				    tmpn1.className = confirmationClasses[conf.status] || "";
+				    tmpn1.getElementsByTagName("td")[2].firstChild.appendChild(
+				        document.createTextNode(conf.message || ""));
+                }
+				accordionnode.getElementsByTagName("tbody")[0].appendChild(tmpn1);
+				Hover.accordion.addComponent("ParticipantsExternal"+i,accordionnode,false);
+				Hover.references.allGroups.push("ParticipantsExternal"+i);		
+			}
+		}	
+	});
+}
+
+/**
+ * Adds a section with the Edit and Delete actions to the specified hover.
+ * @param {Object} hover A hover object, one of OXContactHover, OXTaskHover,
+ * OXInfostoreHover, OXAppointmentHover.
+ * @param {Function} editAction A function which is called when the edit button
+ * is pressed.
+ * @param {Function} deleteAction A function which is called when the delete
+ * button is pressed.
+ */
+function addHoverActions(hover, editAction, deleteAction) {
+    var actions = jQuery('<div style="width:400px;">' +
+        '<div style="border-top: 1px solid silver; padding: 3px 0;">' +
+            '<div class="menu-item hover">' +
+                '<img style="width: 16px; height: 16px; vertical-align: middle; padding-right: 5px"' +
+                     'src="' + getFullImgSrc("icons/24/edit.png") + '" alt=""/>' +
+                '<span></span>' +
+            '</div>' +
+            '<div class="menu-item hover">' +
+                '<img style="width: 16px; height: 16px; vertical-align: middle; padding-right: 5px"' +
+                     'src="' + getFullImgSrc("icons/16/delete.png") + '" alt=""/>' +
+                '<span></span>' +
+            '</div>' +
+        '</div>' +
+    '</div>');
+    var spans = actions.find("div.menu-item");
+    if (IE === 7) {
+        jQuery(spans).addClass("ie7");
+    }
+    hover.references.actions = actions[0];
+    hover.references.actionEdit = spans[0];
+    hover.references.actionDelete = spans[1];
+    hover.accordion.addComponent("Actions", actions[0]);
+    hover.hide = function() { this.actualHover.reset(); };
+    var action_callbacks = [function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        hover.hide();
+        editAction();
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        hover.hide();
+        deleteAction();
+    }];
+    var labels = [_("Edit"), _("Delete")];
+    spans.each(function(i) {
+        jQuery(this).find("span").append(addTranslated(labels[i]));
+        jQuery(this).click(action_callbacks[i]).mouseenter(function(e) {
+            jQuery(this).toggleClass("menu-item-over", true);
+        }).mouseleave(function(e) {
+            jQuery(this).toggleClass("menu-item-over", false);
+        });
+    });
+}
+
+/**
+ * Updates which buttons are visible based on the permissions of the current
+ * object.
+ * @param {Object} hover A hover object, one of OXContactHover, OXTaskHover,
+ * OXInfostoreHover, OXAppointmentHover.
+ */
+function updateHoverActions(hover) {
+    menuhasRightandLoad([hover.actualobject], "WRITE",
+        function(can) { jQuery(hover.references.actionEdit).toggle(can); });
+    menuhasRightandLoad([hover.actualobject], "DELETE",
+        function(can) { jQuery(hover.references.actionDelete).toggle(can); });
+}
+
+function OXContactHover() {}
+OXContactHover.actualmodule="contacts";
+OXContactHover.moduleint=7;
+OXContactHover.hoverWidth = 400;
+OXContactHover.contentobject;
+OXContactHover.actualobject;
+OXContactHover.actualHover=null;
+OXContactHover.accordion;
+OXContactHover.references={ events: [] };
+OXContactHover.start = function() {
+	if(!OXContactHover.references["core_contact_template"]) {
+		var tmpnode=$("contactHovertmpl").cloneNode(true);
+		$("contactHovertmpl").parentNode.removeChild($("contactHovertmpl"));
+		OXContactHover.references["core_contact_template"]=tmpnode;
+	}
+	if(!OXContactHover.references["core_contact_template2"]) {
+		var tmpnode=$("contactHovertmpl2").cloneNode(true);
+		$("contactHovertmpl2").parentNode.removeChild($("contactHovertmpl2"));
+		OXContactHover.references["core_contact_template2"]=tmpnode;
+	}
+};
+OXContactHover.getContent = function() {
+	if(OXContactHover.contentobject) { 
+		return OXContactHover.contentobject;
+	}
+	var element=createHoverContent(null,null,null,null,1);
+	OXContactHover.accordion=new Accordion(450,OXContactHover.hoverWidth);	
+	var contentnode=OXContactHover.references["core_contact_template"].cloneNode(true);
+	contentnode.id += ++OXGroupwareHover.uid;
+	var contentnode2=OXContactHover.references["core_contact_template2"].cloneNode(true);
+    contentnode2.id += ++OXGroupwareHover.uid;
+	OXContactHover.accordion.addComponent("Contact_General",contentnode,false);
+	OXContactHover.accordion.addComponent("Contact_Additional",contentnode2,false);
+	
+	OXContactHover.references["core_content_full"]=OXGroupwareHover.references["core_content_full"].cloneNode(true);
+	OXContactHover.references["core_content_full"].id += "-contact";
+	OXContactHover.accordion.addComponent("NoteFull",OXContactHover.references["core_content_full"],150);
+	var tmptds=OXContactHover.references["core_content_full"].getElementsByTagName("td");
+	OXContactHover.references["notefull"]=tmptds[0];
+    
+    addHoverActions(OXContactHover, function() {
+        var object = OXContactHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        var method = (object.distribution_list === true 
+                || object.mark_as_distributionlist === true) ? "editDistributionList" : "edit";
+        ox.api.contact[method]({ params: { id: object.id, folder: folder },
+                                     id: { id: object.id, folder: folder } });
+    }, function() {
+        var object = OXContactHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        newConfirm(_("Delete Contact"),
+            _("Are you sure you want to delete the contact?"),
+            AlertPopup.YESNO, null, null,
+            function () {
+                OXContactMapping.deleteObjects([object], function() {
+                    objContactFunctions.resetContactCardCache();
+                    if (ox.api.config.get("modules.portal.module") === true) {
+                        oPortal.refresh();
+                    }
+                });
+            },
+            null);
+    });
+    
+	var tabs = new Tabbing("1");
+	tabs.addTab(
+			new Tab("general", _("General"), 
+				function() { 
+                    OXContactHover.accordion.showContent(
+                        "Contact_General,NoteFull,Actions");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("addresses", _("Addresses"),
+				function() { 
+					OXContactHover.accordion.showContent("Contact_Additional");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("additional", _("Additional"),
+				function() { 
+					OXContactHover.accordion.showContent("Contact_Additional");
+				}
+			)
+	);
+	if (corewindow.ox.upsell.isVisible("infostore") && corewindow.ox.upsell.isVisible("contacts-attachments")) {
+    	tabs.addTab(
+    			new Tab("attachments", _("Attachments"),
+    				function() { 
+    					OXContactHover.accordion.showContent("Attachments");
+    				}
+    			)
+    	);
+	}
+	
+	OXContactHover.slider = tabs;
+	
+	var node = OXContactHover.accordion.getDomNode();
+	var d = newnode("div",{ padding:"0px" , overflow:"hidden"},{className : "tabbing_tab"},[
+		newnode("table",{ height : "22px "},{cellPadding : 0, cellSpacing : 0, border : 0, width : "100%"},[
+			newnode("tbody", {}, {}, [tabs.getDOMNode()])
+		])
+	]);	
+	
+	element.body.appendChild(d);
+	element.body.appendChild(node);
+	element.node.display="none";
+	body.appendChild(element.node);
+	OXContactHover.contentobject = element;
+	
+	return OXContactHover.contentobject;    
+};
+
+OXContactHover.fillGeneral = function(id, folder) {
+	function fillContent(type,value,titletext,clear,show) {
+		if(clear) { removeChildNodes(OXContactHover.references[type]); }
+		if(value) { OXContactHover.references[type].appendChild(value); }
+		if(titletext) { OXContactHover.references[type].title=titletext; }
+		if(show) { OXContactHover.references[type].style.display=""; }
+	}
+	function fillText(type,text,titletext,clear) {
+		if(clear) { removeChildNodes(OXContactHover.references[type]); }
+		if(text) { OXContactHover.references[type].appendChild(document.createTextNode(text)); }
+		if(titletext) { OXContactHover.references[type].title=titletext; }
+	}
+	
+
+	var hoverTemplate=OXContactHover.references["core_contact_template"].cloneNode(true);
+	hoverTemplate.id += ++OXGroupwareHover.uid;
+	var hoverTemplate2=OXContactHover.references["core_contact_template2"].cloneNode(true);
+    hoverTemplate2.id += ++OXGroupwareHover.uid;
+
+				function newLineBreak() {
+					return newnode("br", {}, {className: "cleaner"});
+				}				
+				clearCardHoverFields();
+				var nameHeadline = objContactCardFunctions.getHeadline(OXContactHover.actualobject);
+				var classLine = "hoverContactline";
+				if(OXContactHover.actualobject.contains_image1 && OXContactHover.actualobject.contains_image1 > 0) {
+					classLine = "hoverContactline";					
+					hoverTemplate.appendChild(newnode("div", {paddingLeft: "7px",width:"70px"}, {className: "cardHoverImg"}, [newnode("img", {width:"4em"}, {src: OXContactHover.actualobject.image1_url + "&width=90&height=90&scaleType=contain&random=" + (OXContactHover.actualobject.image_last_modified || 0) })]));
+				} else if(!OXContactHover.actualobject.mark_as_distributionlist) {	
+					classLine = "hoverContactlineSmallImage";
+					hoverTemplate.appendChild(newnode("div", {paddingLeft: "7px",width:"40px"}, {className: "cardHoverImg"}, [newnode("img", {}, {src: getFullImgSrc("img/contacts/dummypicture_small.gif")})]));
+				} else {
+					classLine = "hoverContactlineSmallImage";
+					hoverTemplate.appendChild(newnode("div", {paddingLeft: "7px",width:"40px"}, {className: "cardHoverImg"}, [newnode("img", {}, {src: getFullImgSrc("img/contacts/distributionlist34x34_n.gif")})]));
+				}
+				 
+				var nameDiv = newnode("div", {fontWeight:"bold",fontSize:"11pt",paddingLeft: "7px"}, {className: classLine, title: (nameHeadline)?nameHeadline:""}, [document.createTextNode(nameHeadline?nameHeadline:"")]);
+				
+				hoverTemplate.appendChild(nameDiv);
+				/*
+				if (OXContactHover.actualobject.number_of_attachments) {
+					hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverIconRight"}, [newnode("img", {}, {src: getFullImgSrc("img/mail/attachment.gif")})]));					
+				}	
+				*/			
+				var attributPaddingR = "15px";
+				if (OXContactHover.actualobject.color_label) {
+					hoverTemplate.appendChild(newnode("div", {paddingRight: attributPaddingR}, {className: "cardHoverIconRight"}, [newnode("img", {}, {src: getFullImgSrc("img/menu/tag_"+OXContactHover.actualobject.color_label+".gif")})]));
+					attributPaddingR = "3px";
+				}
+				if (OXContactHover.actualobject.private_flag) {
+					hoverTemplate.appendChild(newnode("div", {paddingRight: attributPaddingR}, {className: "cardHoverIconRight"}, [newnode("img", {}, {src: getFullImgSrc("img/private_flag.gif")})]));
+				} 
+				if (OXContactHover.actualobject.mark_as_distributionlist) {	
+					var emails = "";
+                    if (OXContactHover.actualobject.distribution_list)
+					for (var n=0; n < OXContactHover.actualobject.distribution_list.length; n++) {
+						emails += (n>0) ? ", " : "";
+						emails += OXContactHover.actualobject.distribution_list[n].mail;
+					}
+					var sendToAll = newnode("div", {cursor: "pointer"}, {className: "cardHoverIconRight"}, [newnode("img", {paddingRight: "10px"}, {src: getFullImgSrc("img/mail/mail.gif"), title:"Send E-Mail to all"/*i18n*/})]);
+					var myclick = (function(emails) {
+                        return function() {
+                            sendMailToContactMail(emails);
+                        };
+                    })(emails);
+					OXContactHover.references.events.push([sendToAll, "click", myclick]);
+					addDOMEvent(sendToAll, "click", myclick);
+					hoverTemplate.appendChild(sendToAll);
+					
+					myclick = sendToAll = emails = null;
+				}
+				nameDiv.appendChild(newLineBreak());
+				if (OXContactHover.actualobject.company) {
+					nameDiv.appendChild(newnode("div", {fontWeight:"normal",fontSize:"9pt"}, {className: "hoverContactline"}, [document.createTextNode(OXContactHover.actualobject.company)]));					
+				}
+				hoverTemplate.appendChild(nameDiv);
+				hoverTemplate.appendChild(newLineBreak());
+				
+				if (OXContactHover.actualobject.mark_as_distributionlist) {
+				    if (OXContactHover.slider.getTabById("attachments") !== null) {
+				        OXContactHover.slider.getTabById("attachments").show(false);
+				    }
+					OXContactHover.slider.getTabById("addresses").show(false);
+					OXContactHover.slider.getTabById("additional").show(true);
+					
+                    if (OXContactHover.actualobject.distribution_list) {
+    					for (var k=0; k<OXContactHover.actualobject.distribution_list.length; k++) {
+    						(function(m) {
+    						    var emailAddress = OXContactHover.actualobject.distribution_list[m].mail;
+    						    var displayName = OXContactHover.actualobject.distribution_list[m].display_name;
+    						    
+    						    var mailNode1 = newnode("div", {cursor: "pointer"}, { className: "hoverContactline2", title: emailAddress }, [ document.createTextNode(emailAddress) ]);
+    						    hoverTemplate.appendChild(newnode("div", {},  { className: "cardHoverIcon" }, [
+                                      newnode("img", { flt: "left" }, { src: getFullImgSrc("img/mail/unread.gif")} ),
+                                      mailNode1
+                                ]));
+    						    hoverTemplate.appendChild(newLineBreak());
+    						    
+    						    var myclick = (function(emailAddress) {
+    		                        return function() {
+    		                            sendMailToContactMail(emailAddress);
+    		                        };
+    		                    })(emailAddress);
+    						    OXContactHover.references.events.push([mailNode1, "click", myclick]);
+    						    addDOMEvent(mailNode1, "click", myclick);
+    						    
+    						    var address = [ document.createTextNode(emailAddress) ];
+    						    if (displayName && trimStr(displayName).length !== 0) {
+    						        address.splice(0,0, newnode("span", { fontWeight: "bold" }, 0, [ document.createTextNode(displayName + ":\xa0") ]));
+    						    }
+    						    
+    						    var mailNode2 = newnode("div", { cursor: "pointer", paddingLeft: "7px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, {}, address );
+    						    hoverTemplate2.appendChild(mailNode2);
+    						    OXContactHover.references.events.push([mailNode2, "click", myclick]);
+    						    addDOMEvent(mailNode2, "click", myclick);
+    						    
+    						    mailNode2 = address = myclick = mailNode1 = displayName = emailAddress = null;
+    						})(k);
+    					}
+                    }
+				} else {
+				    if (OXContactHover.slider.getTabById("attachments") !== null) {
+				        OXContactHover.slider.getTabById("attachments").show(true);
+				    }
+					OXContactHover.slider.getTabById("addresses").show(true);
+					OXContactHover.slider.getTabById("additional").show(false);
+					
+					var contactPhones = [];
+					var contactPhonesDesc = [];
+					var contactMobiles = [];
+					var contactMobilesDesc = [];
+					var contactMails = [];
+					var contactMailsDesc = [];
+					var contactFax = [];
+					var contactFaxDesc = [];
+					
+					for (idfield in OXContactHover.actualobject) {
+					
+							if (!OXContactHover.actualobject[idfield]) {
+								continue;
+							}
+									
+						(function(idfields) {
+							if(idfields.indexOf("telephone_business1") != -1) {
+								contactPhones.push(OXContactHover.actualobject[idfields]);
+								contactPhonesDesc.push(_("Phone (business):"));
+							} else if(idfields.indexOf("telephone_company") != -1) {
+								contactPhones.push(OXContactHover.actualobject[idfields]);
+								contactPhonesDesc.push(_("Phone (company):"));
+							}
+							else if(idfields.indexOf("telephone_home1") != -1) {
+								contactPhones.push(OXContactHover.actualobject[idfields]);
+								contactPhonesDesc.push(_("Phone (private):"));
+							}
+							else if(idfields.indexOf("telephone_other") != -1) {
+								contactPhones.push(OXContactHover.actualobject[idfields]);
+								contactPhonesDesc.push(_("Phone (other):"));
+							}
+							else if(idfields.indexOf("cellular_telephone1") != -1) {
+								contactMobiles.push(OXContactHover.actualobject[idfields]);
+								contactMobilesDesc.push(_("Mobile:"));
+							}
+							else if(idfields.indexOf("cellular_telephone2") != -1) {
+								contactMobiles.push(OXContactHover.actualobject[idfields]);
+								contactMobilesDesc.push(_("Mobile (private):"));
+							}
+							else if(idfields.indexOf("email1") != -1) {
+								contactMails.push(OXContactHover.actualobject[idfields]);
+								contactMailsDesc.push(_("E-Mail (business):"));
+							}
+							else if(idfields.indexOf("email2") != -1) {
+								contactMails.push(OXContactHover.actualobject[idfields]);
+								contactMailsDesc.push(_("E-Mail (private):"));
+							}
+							else if(idfields.indexOf("email3") != -1) {
+								contactMails.push(OXContactHover.actualobject[idfields]);
+								contactMailsDesc.push(_("E-Mail (other):"));
+							}
+							else if(idfields.indexOf("fax_business") != -1) {
+								contactFax.push(OXContactHover.actualobject[idfields]);
+								contactFaxDesc.push(_("Fax (business):"));
+							}
+							else if(idfields.indexOf("fax_home") != -1) {
+								contactFax.push(OXContactHover.actualobject[idfields]);
+								contactFaxDesc.push(_("Fax (private):"));
+							}
+							else if(idfields.indexOf("fax_other") != -1) {
+								contactFax.push(OXContactHover.actualobject[idfields]);
+								contactFaxDesc.push(_("Fax (other):"));
+							}
+						})(idfield)						
+					}
+					
+					if(contactMobiles && contactMobiles.length>0) {
+						for(var s=0; s< contactMobiles.length; s++) {
+							hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverLabel"}, [document.createTextNode(contactMobilesDesc[s])]));
+							hoverTemplate.appendChild(newnode("div", {}, {className: "hoverContactline"}, [document.createTextNode(contactMobiles[s])]));				
+							hoverTemplate.appendChild(newLineBreak());
+						}						
+					}
+					
+					if(contactPhones && contactPhones.length>0) {
+						for(var s=0; s< contactPhones.length; s++) {
+							hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverLabel"}, [document.createTextNode(contactPhonesDesc[s])]));
+							hoverTemplate.appendChild(newnode("div", {}, {className: "hoverContactline"}, [document.createTextNode(contactPhones[s])]));				
+							hoverTemplate.appendChild(newLineBreak());
+						}						
+					}
+					
+					if(contactMails && contactMails.length>0) {
+						for(var s=0; s< contactMails.length; s++) {
+							(function(t) {
+								hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverLabel"}, [document.createTextNode(contactMailsDesc[t])]));
+								var emailAdressContact = contactMails[t];
+								//hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverIcon"}, [newnode("img", {}, {src: getFullImgSrc("img/mail/unread.gif")})]));
+								var mailNode3 = newnode("div", {cursor: "pointer"}, {className: "hoverContactline", title: emailAdressContact}, [document.createTextNode(emailAdressContact)]);
+								addDOMEvent(mailNode3, "click", function() { sendMailToContactMail(emailAdressContact) });
+								hoverTemplate.appendChild(mailNode3);				
+								hoverTemplate.appendChild(newLineBreak());
+							})(s)
+						}						
+					}
+						
+					if(contactFax && contactFax.length>0) {
+						for(var s=0; s< contactFax.length; s++) {
+							hoverTemplate.appendChild(newnode("div", {}, {className: "cardHoverLabel"}, [document.createTextNode(contactFaxDesc[s])]));
+							hoverTemplate.appendChild(newnode("div", {}, {className: "hoverContactline"}, [document.createTextNode(contactFax[s])]));				
+							hoverTemplate.appendChild(newLineBreak());
+						}						
+					}
+					
+					// CATEGORIES
+					if (OXContactHover.actualobject.categories) {
+						var crby = newnode("div", { width:"100%", padding: "0 3px 0 7px" });
+						hoverTemplate.appendChild(crby);
+						hoverTemplate.appendChild(newLineBreak());
+						ox.categories.ui.drawCategoriesList(ox.categories.getByString(OXContactHover.actualobject.categories), crby);
+					}
+					
+					var crby = newnode("div", { width:"100%", paddingTop:"12px", fontSize: "0.9em", whiteSpace: "normal", height: "auto" }, {className: "cardHoverLabel"});	
+					hoverTemplate.appendChild(crby);
+					hoverTemplate.appendChild(newLineBreak());
+					if (OXContactHover.actualobject.created_by) {
+						internalCache.getUsers([OXContactHover.actualobject.created_by],function(response) {
+							try {
+								var created_by = response[OXContactHover.actualobject.created_by].display_name || "";
+								var created_on = formatDate(OXContactHover.actualobject.creation_date, "datetime") || "";
+								//#. %1$s is the creation date.
+								//#. %2$s is the name of the creator.
+								//#, c-format
+								var txt = format(_("Created on %1$s by %2$s"), [created_on, created_by]);
+								crby.appendChild(document.createTextNode(txt));
+							} catch(n) {}
+						});
+					}
+					
+					var chby = newnode("div", { width:"100%", fontSize: "0.9em", whiteSpace: "normal", height: "auto" }, {className: "cardHoverLabel"});
+					hoverTemplate.appendChild(chby);
+					hoverTemplate.appendChild(newLineBreak());
+					if (OXContactHover.actualobject.modified_by) {
+						internalCache.getUsers([OXContactHover.actualobject.modified_by],function(response) {
+							try {
+								var changed_by = response[OXContactHover.actualobject.modified_by].display_name || "";
+								var changed_on = formatDate(OXContactHover.actualobject.last_modified, "datetime") || "";
+								//#. %1$s is the last modification date.
+								//#. %2$s is the name of the last editor.
+								//#, c-format
+								var txt = format(_("Last changed on %1$s by %2$s"), [changed_on, changed_by]);
+								chby.appendChild(document.createTextNode(txt));
+							} catch(n) {}
+						});
+					}
+					
+					var oMyAddresses2 = new BuildAddresses(OXContactHover.actualobject);
+					var AdressesO = {};
+					
+					var businessAddrArray2	= oMyAddresses2.buildAddress("business");	
+					var privateAddrArray2	= oMyAddresses2.buildAddress("home");		
+					var otherAddrArray2	= oMyAddresses2.buildAddress("other");
+					var noAddressFound = true;			
+					if(businessAddrArray2[0] && businessAddrArray2[0] != "") {
+						hoverTemplate2.appendChild(newnode("div", {fontWeight:"bold"}, {className: "hoverContactline2"}, [document.createTextNode(_("Business"))]));				
+						hoverTemplate2.appendChild(newLineBreak());
+						if (OXContactHover.actualobject.company) {
+							hoverTemplate2.appendChild(newnode("div", {paddingLeft:"7px"},{}, [document.createTextNode(OXContactHover.actualobject.company)]));
+						}
+						hoverTemplate2.appendChild(newnode("div", {paddingLeft:"7px"},{}, [businessAddrArray2[0]]));		
+						hoverTemplate2.appendChild(newLineBreak());
+						noAddressFound = false;
+					}
+					if(privateAddrArray2[0] && privateAddrArray2[0] != "") {
+						hoverTemplate2.appendChild(newnode("div", {fontWeight:"bold"}, {className: "hoverContactline2"}, [document.createTextNode(_("Private"))]));				
+						hoverTemplate2.appendChild(newLineBreak());
+						hoverTemplate2.appendChild(newnode("div", {paddingLeft:"7px"},{}, [privateAddrArray2[0]]));	
+						hoverTemplate2.appendChild(newLineBreak());
+						noAddressFound = false;
+					}	
+					if(otherAddrArray2[0] && otherAddrArray2[0] != "") {
+						hoverTemplate2.appendChild(newnode("div", {fontWeight:"bold"}, {className: "hoverContactline2"}, [document.createTextNode(_("Additional"))]));				
+						hoverTemplate2.appendChild(newLineBreak());
+						hoverTemplate2.appendChild(newnode("div", {paddingLeft:"7px"},{}, [otherAddrArray2[0]]));				
+						hoverTemplate2.appendChild(newLineBreak());
+						noAddressFound = false;
+					}
+					if(noAddressFound) {
+						hoverTemplate2.appendChild(newnode("div", {fontWeight:"bold", padding: "7px"}, {className: "hoverContactline2"}, [document.createTextNode(_("No addresses available"))]));
+					}
+
+				}
+			
+			fillContent("notefull", getDivforTextContent(OXContactHover.actualobject.note || ""),null,true);
+            updateHoverActions(OXContactHover);
+			
+			OXContactHover.accordion.addComponent("Contact_General",hoverTemplate,false);
+			OXContactHover.accordion.addComponent("Contact_Additional",hoverTemplate2,false);
+			OXContactHover.accordion.addComponent("NoteFull",OXContactHover.references["core_content_full"],150);
+            OXContactHover.accordion.addComponent("Actions", OXContactHover.references.actions);
+};
+
+OXContactHover.refillContent = function(id, folder, callback) {
+	function fillContent(type,value,titletext,clear,show) {
+		if(clear) { removeChildNodes(OXContactHover.references[type]); }
+		if(value) { OXContactHover.references[type].appendChild(value); }
+		if(titletext) { OXContactHover.references[type].title=titletext; }
+		if(show) { OXContactHover.references[type].style.display=""; }
+	}
+	function fillText(type,text,titletext,clear) {
+		if(clear) { removeChildNodes(OXContactHover.references[type]); }
+		if(text) { OXContactHover.references[type].appendChild(document.createTextNode(text)); }
+		if(titletext) { OXContactHover.references[type].title=titletext; }
+	}
+	
+	var collection={};
+    collection.objects=collection.objects=[OXContactMapping.createKeyFromObject({"module" : "contacts" ,"folder_id" : folder, id : id})];;
+    collection.columns=null;
+    
+    OXContactHover.oxCacheRequest=OXCache.newRequest(null,"contacts",collection,null,
+    function(daten) {
+        if (daten.objects[0]) {
+			OXContactHover.actualobject=daten.objects[0];
+	        OXContactHover.actualobject.id=id;
+	        OXContactHover.actualobject.folder_id=folder;
+	        OXContactHover.fillGeneral(id, folder);
+			
+	        if (OXContactHover.slider.getTabById("attachments") !== null) {
+	            OXContactHover.slider.getTabById("attachments").setTitle(_("Attachments") + " (0)");
+	            OXGroupwareHover.fillAttachments(OXContactHover);
+	        }
+			
+			OXContactHover.slider.selectTabById("general");
+			
+			if (callback) callback();
+		}
+	});	
+}
+
+
+function OXTaskHover() {}
+OXTaskHover.actualmodule="tasks";
+OXTaskHover.moduleint=4;
+OXTaskHover.contentobject;
+OXTaskHover.actualobject;
+OXTaskHover.references=new Object();
+OXTaskHover.references.allGroups=new Array();
+OXTaskHover.references.allGroupsParticipants=new Object();
+OXTaskHover.getContent = function() {
+	if(OXTaskHover.contentobject) { 
+		return OXTaskHover.contentobject;
+	}
+	var element=createHoverContent(null,null,null,null,2);
+	OXTaskHover.accordion=new Accordion(450,400);	
+	refillImages("template_tasks_hover_page1");
+	var contentnode=$("template_tasks_hover_page1");
+	OXTaskHover.references["core"]=contentnode;
+	OXTaskHover.accordion.addComponent("Task_General",contentnode,false);
+		
+	var tmptds=OXTaskHover.references["core"].getElementsByTagName("td");
+	OXTaskHover.references["title"]=tmptds[1];
+	OXTaskHover.references["coreimg"]=tmptds[2];
+	OXTaskHover.references["status"]=tmptds[3];
+	OXTaskHover.references["priority"]=tmptds[4];
+	OXTaskHover.references["start_time"]=tmptds[6];
+	OXTaskHover.references["end_time"]=tmptds[8];
+	OXTaskHover.references["categories"]=tmptds[9];
+	OXTaskHover.references["created_by"]=tmptds[10];
+	OXTaskHover.references["changed_by"]=tmptds[11];
+	
+	OXTaskHover.references["core_content_full"]=OXGroupwareHover.references["core_content_full"].cloneNode(true);
+	OXTaskHover.references["core_content_full"].id += "-task";
+	OXTaskHover.accordion.addComponent("NoteFull",OXTaskHover.references["core_content_full"],150);
+	var tmptds=OXTaskHover.references["core_content_full"].getElementsByTagName("td");
+	OXTaskHover.references["notefull"]=tmptds[0];
+    	
+    addHoverActions(OXTaskHover, function() {
+        var object = OXTaskHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        ox.api.task.edit({ params: { id: object.id, folder: folder },
+                               id: { id: object.id, folder: folder } });
+    }, function() {
+        var object = OXTaskHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        newConfirm(_("Delete Task"),
+            _("Are you sure you want to delete the task?"),
+            AlertPopup.YESNO, null, null,
+            function () {
+                OXTaskMapping.deleteObjects([object], function() {
+                    if (ox.api.config.get("modules.portal.module") === true) {
+                        oPortal.refresh();
+                    }
+                });
+            },
+            null);
+    });
+    
+	var tabs = new Tabbing("2");
+	tabs.addTab(
+			new Tab("general", _("General"), 
+				function() { 
+                    OXTaskHover.accordion.showContent(
+                        "Task_General,NoteFull,Actions");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("participants", _("Participants"),
+				function() { 
+					var tmpstring=OXOperationHover.getParticipantsString(OXTaskHover);
+					OXTaskHover.accordion.showContent(tmpstring);
+					// re-position of old group/participant state if switching back to this tab
+					for (var i in OXTaskHover.references.allGroupsParticipants) {
+		        		var group = OXTaskHover.references.allGroupsParticipants[i];
+		        		if (group.active) {
+		        			OXTaskHover.accordion.showExtraContent(i);
+		        		}		        		
+		        	}
+				}
+			)
+	);
+	if (corewindow.ox.upsell.isVisible("infostore") && corewindow.ox.upsell.isVisible("tasks-attachments")) {
+    	tabs.addTab(
+    			new Tab("attachments", _("Attachments"),
+    				function() { 
+    					OXTaskHover.accordion.showContent("Attachments");
+    				}
+    			)
+    	);
+	}
+	
+	OXTaskHover.slider = tabs;
+	
+	var node = OXTaskHover.accordion.getDomNode();
+	var d = newnode("div",{ padding:"0px" , overflow:"hidden"},{className : "tabbing_tab"},[
+		newnode("table",{ height : "22px "},{cellPadding : 0, cellSpacing : 0, border : 0, width : "100%"},[
+			newnode("tbody", {}, {}, [tabs.getDOMNode()])
+		])
+	]);	
+	
+	element.body.appendChild(d);
+	element.body.appendChild(node);
+	element.node.display="none";
+	body.appendChild(element.node);
+	OXTaskHover.contentobject = element;
+	
+	return OXTaskHover.contentobject; 
+}
+OXTaskHover.refillContent = function(id,folder) {
+
+
+	var collection={};
+    collection.objects=collection.objects=[OXTaskMapping.createKeyFromObject({"module" : "tasks" ,"folder_id" : folder, id : id})];;
+    collection.columns=null;
+
+    OXTaskHover.oxCacheRequest=OXCache.newRequest(null,"tasks",collection,null,
+    function(daten) {
+        if(daten.objects[0]) {	        	        
+			OXTaskHover.actualobject=daten.objects[0];
+			OXTaskHover.fillGeneral();
+			OXOperationHover.fillParticipants(OXTaskHover);
+			OXGroupwareHover.fillAttachments(OXTaskHover);         	
+			OXTaskHover.slider.selectTabById("general");
+        }           
+    });
+};
+OXTaskHover.fillGeneral= function() {
+	function fillContent(type,value,titletext,clear,show) {
+		if(clear) { removeChildNodes(OXTaskHover.references[type]); }
+		if(value) { OXTaskHover.references[type].appendChild(value); }
+		if(titletext) { OXTaskHover.references[type].title=titletext; }
+		if(show) { OXTaskHover.references[type].style.display=""; }
+	}
+	function fillText(type,text,titletext,clear) {
+		if(clear) { removeChildNodes(OXTaskHover.references[type]); }
+		if(text) { OXTaskHover.references[type].appendChild(document.createTextNode(text)); }
+		if(titletext) { OXTaskHover.references[type].title=titletext; }
+	}
+	function getStatusTaskNode(status,percent_completed) {
+		var statstr=_("unknown");
+		switch(status) {
+			case null:
+			case 1: statstr=_("Not started"); break;
+			case 2: statstr=_("In progress"); break;
+			case 3: statstr=_("Done"); break;
+			case 4: statstr=_("Waiting"); break;
+			case 5: statstr=_("Deferred"); break;
+		}
+		fillText("status",statstr,percent_completed +" " +
+		_("% completed") /*i18n*/,true);	
+	}
+	function getPrioNode(priority,count) {
+		//OXTaskHover.references["priority"].colspan=count || 1;
+		var statstr=_("unknown"); /*i18n*/
+		switch(priority) {
+			case 1: statstr=_("Low"); /*i18n*/ break;			
+			case 3: statstr=_("High"); /*i18n*/ break;
+			default:
+				priority = 2;
+				statstr=_("Normal"); /*i18n*/ 
+			break;
+		}
+		fillContent("priority",newnode("img",{},{ src: getFullImgSrc("img/tasks/taskprio"+priority+".gif")},[]),statstr,true,true);
+	}
+	var object=OXTaskHover.actualobject;
+	//TITLE
+	fillText("title",object.title ? object.title : "",object.title ? object.title : "",true);
+	fillContent("coreimg", undefined, undefined, true, false);
+	var count=0;
+	//PRIVATE FLAG OR GROUP APPOINTMENT
+	if(object.private_flag) {
+		fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/private_flag.gif")},[]),_("Private task"),false,true);
+		count++;
+	}
+	//RECURRENCE APPOINTMENT
+	if(object.recurrence_type && object.recurrence_type != 0) {
+		fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/tasks/sequence.gif")},[]),_("Recurring task"),false,true);
+		count++;
+	}
+	//FLAGS
+	if(object.color_label && object.color_label!=0) {
+		fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/menu/tag_"+object["color_label"]+".gif")},[]),null,false,true);
+		count++;
+	}
+	getPrioNode(object.priority,count);
+	
+	var width = "";
+	if (count <= 1) width = "40px";
+	else if (count > 1) width = (count*20) + "px";
+	OXTaskHover.references["coreimg"].style.width = width;
+	
+	getStatusTaskNode(object.status,object.percent_completed);
+	//DATE AND TIME
+	if(object.start_date) {
+		fillText("start_time", formatDate(object.start_date,"date"),formatDate(object.start_date,"date"),true);
+	} else {
+		fillText("start_time", _("Not set"), "", true);
+	}
+	if(object.end_date) {
+		fillText("end_time", formatDate(object.end_date,"date"),formatDate(object.end_date,"date"),true);
+	} else {
+		fillText("end_time", _("Not set"), "", true);
+	}
+	
+	if (object.created_by) {
+		internalCache.getUsers([object.created_by],function(response) {
+			try {
+				var created_by = response[object.created_by].display_name || "";
+				var created_on = formatDate(object.creation_date, "datetime") || "";
+                //#. %1$s is the creation date.
+                //#. %2$s is the name of the creator.
+                //#, c-format
+				var txt = format(_("Created on %1$s by %2$s"), [created_on, created_by]);
+				fillText("created_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		fillText("created_by", "", "",true);
+	}
+	
+	if (object.modified_by) {
+		internalCache.getUsers([object.modified_by],function(response) {
+			try {
+				var changed_by = response[object.modified_by].display_name || "";
+				var changed_on = formatDate(object.last_modified, "datetime") || "";
+                //#. %1$s is the last modification date.
+                //#. %2$s is the name of the last editor.
+                //#, c-format
+				var txt = format(_("Last changed on %1$s by %2$s"), [changed_on, changed_by]);
+				fillText("changed_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		fillText("changed_by", "", "",true);
+	}
+	
+	// CATEGORIES
+	if (OXTaskHover.actualobject.categories) {
+		var node = newnode("div");
+		ox.categories.ui.drawCategoriesList(ox.categories.getByString(OXTaskHover.actualobject.categories), node);		
+		fillContent("categories",node,null,true,true);
+		OXTaskHover.references["categories"].parentNode.style.display="";
+	} else {
+		removeChildNodes(OXTaskHover.references["categories"]);
+		OXTaskHover.references["categories"].parentNode.style.display="none";
+	}
+
+	//NOTE
+	if(!object.note) { object.note=""; }
+    
+    updateHoverActions(OXTaskHover);
+    
+	OXTaskHover.slider.getTabById("participants").setTitle(_("Participants") + " (" + OXTaskHover.actualobject.participants.length + ")");
+	if (OXTaskHover.slider.getTabById("attachments") !== null) {
+	    OXTaskHover.slider.getTabById("attachments").setTitle(_("Attachments") + " (0)");
+	}
+	fillContent("notefull", getDivforTextContent(object.note),null,true);
+	OXTaskHover.accordion.checkComponentHeight("Task_General");
+	OXTaskHover.accordion.checkComponentHeight("NoteFull");
+    OXTaskHover.accordion.checkComponentHeight("Actions");
+};
+OXTaskHover.fillOthers = function() {	};
+
+
+function OXInfostoreHover() {}
+OXInfostoreHover.actualmodule="infostore";
+OXInfostoreHover.moduleint=137;
+OXInfostoreHover.contentobject;
+OXInfostoreHover.actualobject;
+OXInfostoreHover.references=new Object();
+OXInfostoreHover.references.allVersions=new Array();
+OXInfostoreHover.references.allVersionComments=new Object();
+OXInfostoreHover.getVersionsString= function(Hover) {
+	var tmpstring="Versions";
+	for(var i=0;i<Hover.references.allVersions.length;i++) {
+		tmpstring+=","+Hover.references.allVersions[i];
+	}
+	return tmpstring;
+}	
+
+OXInfostoreHover.getContent = function() {
+	if(OXInfostoreHover.contentobject) { 
+		return OXInfostoreHover.contentobject;
+	}
+	var element=createHoverContent(null,null,null,null,3);
+	OXInfostoreHover.accordion=new Accordion(450,400);	
+	
+	refillImages("template_infostore_hover_page1");
+	var contentnode=$("template_infostore_hover_page1");
+	OXInfostoreHover.references["core"]=contentnode;
+	OXInfostoreHover.accordion.addComponent("Infostore_General",contentnode,false);
+		
+	var tmptds=OXInfostoreHover.references["core"].getElementsByTagName("td");
+	OXInfostoreHover.references["title"]=tmptds[1];
+	OXInfostoreHover.references["coreimg"]=tmptds[2];
+	OXInfostoreHover.references["categories"]=tmptds[3];
+	OXInfostoreHover.references["created_by"]=tmptds[4];
+	OXInfostoreHover.references["changed_by"]=tmptds[5];
+	OXInfostoreHover.references["url"]=tmptds[7];
+	OXInfostoreHover.references["attachment"]=tmptds[8];
+	OXInfostoreHover.references["attachment_version"]=OXInfostoreHover.references["attachment"].getElementsByTagName("td")[0];
+	OXInfostoreHover.references["attachment_mimetype"]=OXInfostoreHover.references["attachment"].getElementsByTagName("td")[1];
+	OXInfostoreHover.references["attachment_filename"]=OXInfostoreHover.references["attachment"].getElementsByTagName("td")[2];
+	OXInfostoreHover.references["attachment_openfile"]=OXInfostoreHover.references["attachment"].getElementsByTagName("td")[3];
+	OXInfostoreHover.references["attachment_savefile"]=OXInfostoreHover.references["attachment"].getElementsByTagName("td")[4];
+	
+	OXInfostoreHover.references["core_content_full"]=OXGroupwareHover.references["core_content_full"].cloneNode(true);
+	OXInfostoreHover.references["core_content_full"].id += "-infostore";
+	OXInfostoreHover.accordion.addComponent("NoteFull",OXInfostoreHover.references["core_content_full"],150);
+	var tmptds=OXInfostoreHover.references["core_content_full"].getElementsByTagName("td");
+	OXInfostoreHover.references["notefull"]=tmptds[0];
+    
+    addHoverActions(OXInfostoreHover, function() {
+        var object = OXInfostoreHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        ox.api.infostore.edit({ params: { id: object.id, folder: folder } });
+    }, function() {
+        var object = OXInfostoreHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        newConfirm(_("Delete Items"),
+            _("Are you sure you want to delete the item?"),
+            AlertPopup.YESNO, null, null,
+            function () {
+                OXInfoStoreMapping.deleteObjects([object], function() {
+                    if (ox.api.config.get("modules.portal.module") === true) {
+                        oPortal.refresh();
+                    }
+                });
+            },
+            null);
+    });
+    
+	var tabs = new Tabbing("3");
+	tabs.addTab(
+			new Tab("general", _("General"), 
+				function() { 
+                    OXInfostoreHover.accordion.showContent(
+                        "Infostore_General,NoteFull,Actions");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("versions", _("Versions"),
+				function() { 
+					OXInfostoreHover.accordion.showContent(OXInfostoreHover.getVersionsString(OXInfostoreHover));
+					// re-position of old version comment state if switching back to this tab
+					for (var i in OXInfostoreHover.references.allVersionComments) {
+		        		var ver = OXInfostoreHover.references.allVersionComments[i];
+		        		if (ver.active) {
+		        			OXInfostoreHover.accordion.showExtraContent(i);
+		        		}		        		
+		        	}
+				}
+			)
+	);
+	
+	OXInfostoreHover.slider = tabs;
+	
+	var node = OXInfostoreHover.accordion.getDomNode();
+	var d = newnode("div",{ padding:"0px" , overflow:"hidden"},{className : "tabbing_tab"},[
+		newnode("table",{ height : "22px "},{cellPadding : 0, cellSpacing : 0, border : 0, width : "100%"},[
+			newnode("tbody", {}, {}, [tabs.getDOMNode()])
+		])
+	]);	
+	
+	element.body.appendChild(d);
+	element.body.appendChild(node);
+	element.node.display="none";
+	body.appendChild(element.node);
+	OXInfostoreHover.contentobject = element;
+	
+	return OXInfostoreHover.contentobject; 
+}
+OXInfostoreHover.refillContent = function(id,folder) {
+
+	var collection={};
+    collection.objects=collection.objects=[OXInfoStoreMapping.createKeyFromObject({"module" : "infostore" ,"folder_id" : folder, id : id})];;
+    collection.columns=null;
+
+    OXInfostoreHover.oxCacheRequest=OXCache.newRequest(null,"infostore",collection,null,
+    function(daten) {
+        if(daten.objects[0]) {	        	        
+	    	OXInfostoreHover.actualobject=daten.objects[0];
+	    	
+			OXInfostoreHover.slider.getTabById("versions").setTitle(_("Versions") + " ("+OXInfostoreHover.actualobject.number_of_versions+")");
+			
+			OXInfostoreHover.fillGeneral();
+			OXInfostoreHover.fillVersions(OXInfostoreHover);	
+			OXInfostoreHover.accordion.checkComponentHeight("Infostore_General");
+			OXInfostoreHover.accordion.checkComponentHeight("NoteFull");
+			OXInfostoreHover.accordion.checkComponentHeight("Actions");
+			
+			OXInfostoreHover.slider.selectTabById("general");
+        }           
+    });
+    
+
+    
+}
+OXInfostoreHover.fillVersions = function(Hover) {
+	for(var i in OXInfostoreHover.references.allVersions) {
+		OXInfostoreHover.accordion.removeComponent(i);
+	}
+	
+	OXInfostoreHover.slider.getTabById("versions").setTitle(_("Versions") + " ("+Hover.actualobject.number_of_versions+")");
+	
+	OXInfostoreHover.references.allVersions=new Array();
+	OXInfostoreHover.references.allVersionComments=new Array();
+	var usersnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+	usersnode.id += ++OXGroupwareHover.uid;
+	var node=usersnode.getElementsByTagName("tbody")[0];
+	node.appendChild(
+		newnode("tr",{ fontWeight: "bold"}, { className: "contenttext notclickable" },[
+			newnode("td",{ paddingTop:"7px" },{colSpan : 2 }, [
+				document.createTextNode(_('Versions')) /*i18n*/
+			])
+		])		
+	);
+	if(!Hover.actualobject.filename || Hover.actualobject.filename == "") {
+		var tmp=newnode("tr",{},{},[
+			newnode("td",{ width: "25px"},{ className: "notclickable"},[
+				newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[])
+			]),
+			newnode("td",{},{ colspan : 4 , className : "contenttext notclickable" },[
+				document.createTextNode(_("No versions available")) /*i18n*/
+			])		
+		]);
+		node.appendChild(tmp);
+	}
+	Hover.accordion.addComponent("Versions",usersnode,false);
+	var columns="705,2,4,702,703,704,709"
+	var sReq = AjaxRoot + "/infostore?action=versions&id=" + Hover.actualobject.id + "&columns="+columns+"&session=" + session;
+	(new JSONX()).get(sReq, null,
+	function(versions) {
+		versions=versions.data;
+		var attachmentfirst=
+			newnode("tr",{},{},[
+				// EXPAND
+				newnode("td",{ width: "20px", paddingTop:"12px", lineHeight : "0px"},{ className : "clickable"},[
+					newnode("img",{},{ src: getFullImgSrc("img/plus.gif") },[]) 
+				]),
+				// Version
+				newnode("td",{ width: "40px", paddingTop:"12px", textAlign:"center"},{ className : "notclickable"},[ 
+				]),
+				//TYPE
+				newnode("td",{ width: "20px", paddingTop:"12px", lineHeight : "0px"},{ className : "notclickable"},[
+					newnode("img",{ height: "16px" , width : "16px"},{ src: getFullImgSrc("img/dummy.gif") },[]) 
+				]),
+				
+				//TEXT
+				newnode("td",{ paddingTop:"12px", overflow: "hidden"},{ colSpan : 2 , className : "contenttext notclickable"},[]),
+				//OPEN
+				newnode("td",{ width: "20px", paddingTop:"12px" , lineHeight : "0px"},{ className : "clickable"},[
+					newnode("img",{},{ src: getFullImgSrc("img/menu/attachment_open.gif") },[])
+				]),
+				//SAVE
+				newnode("td",{ width: "20px", paddingTop:"12px" , lineHeight : "0px"},{ className : "clickable"},[
+					newnode("img",{},{ src: getFullImgSrc("img/menu/attachment_save.gif") },[])
+				])
+			]);
+		var attachmentsecond=
+			newnode("tr",{},{},[
+				newnode("td",{ fontWeight: "bold", width: "20px", paddingLeft : "3px" , paddingRight:"7px" },{ className : "contenttext notclickable"},[
+				]),
+				newnode("td",{},{ className : "contenttext notclickable"},[
+				])
+			]);
+		var attachmentthird=
+			newnode("tr",{},{ className : "notclickable" },[
+				newnode("td",{ paddingLeft: "7px"},{ colSpan : 2 },[
+				])
+			]);
+		
+		for(var i=0;i<versions.length;i++) {
+			var versionnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+			versionnode.id += ++OXGroupwareHover.uid;
+			versionnode.getElementsByTagName("table")[0].style.tableLayout="fixed";
+			var versionbody=versionnode.getElementsByTagName("tbody")[0];
+			var versionfirst=attachmentfirst.cloneNode(true);
+			versionfirst.getElementsByTagName("td")[1].appendChild(document.createTextNode(_("Nr:")+" "+versions[i][0]));
+			versionfirst.getElementsByTagName("img")[1].src=getMimeImage(versions[i][4]);
+			versionfirst.getElementsByTagName("img")[1].title=versions[i][4];
+			versionfirst.getElementsByTagName("td")[3].appendChild(document.createTextNode(versions[i][3]))
+			versionfirst.getElementsByTagName("img")[2].title=_("Open version") /*i18n*/;
+			
+			addDOMEvent(versionfirst.getElementsByTagName("img")[2],"click",OXInfostoreHover.openAttachedFile(Hover.actualobject.id,versions[i][3],versions[i][0]));
+			versionfirst.getElementsByTagName("img")[3].title=_("Save version") /*i18n*/;
+			
+			addDOMEvent(versionfirst.getElementsByTagName("img")[3],"click",OXInfostoreHover.saveAttachedFile(Hover.actualobject.id,versions[i][3],versions[i][0]));
+			
+			addDOMEvent(versionfirst.getElementsByTagName("td")[0],"click",(function(name,td) {
+					return function() {
+						if(Hover.references.allVersionComments[name]) {
+							if(Hover.references.allVersionComments[name].active) {
+								Hover.accordion.hideExtraContent(name);
+								Hover.references.allVersionComments[name].active=false;
+								td.getElementsByTagName("img")[0].src=getFullImgSrc("img/plus.gif");
+							} else {
+								Hover.accordion.showExtraContent(name);
+								Hover.references.allVersionComments[name].active=true;
+								td.getElementsByTagName("img")[0].src=getFullImgSrc("img/minus.gif");
+							}
+						}
+					}})("VersionComment_"+i,versionfirst.getElementsByTagName("td")[0])
+				);
+			
+			versionbody.appendChild(versionfirst);
+			Hover.accordion.addComponent("Version_"+i,versionnode,false);
+			Hover.references.allVersions.push("Version_"+i);
+			var versioncommentnode=OXOperationHover.references["core_participants_participant_template"].cloneNode(true);
+			versioncommentnode.id += ++OXGroupwareHover.uid;
+			var versioncommentbody=versioncommentnode.getElementsByTagName("tbody")[0];
+			var versionsecond=attachmentsecond.cloneNode(true);
+			versionsecond.getElementsByTagName("td")[0].appendChild(document.createTextNode(_("Size:")));
+			versionsecond.getElementsByTagName("td")[1].appendChild(document.createTextNode(OXGroupwareHover.getShortByteString(versions[i][5],false)));
+			versionsecond.getElementsByTagName("td")[1].title=OXGroupwareHover.getShortByteString(versions[i][5],true);
+			versioncommentbody.appendChild(versionsecond);
+			var versionsecond=attachmentsecond.cloneNode(true);
+			versionsecond.getElementsByTagName("td")[0].appendChild(document.createTextNode(_("Creation date:")));
+			versionsecond.getElementsByTagName("td")[1].appendChild(document.createTextNode(formatDate(versions[i][2],"datetime")));
+			versioncommentbody.appendChild(versionsecond);
+			var versionsecond=attachmentsecond.cloneNode(true);
+			versionsecond.getElementsByTagName("td")[0].appendChild(document.createTextNode(_("Created by:")));
+			internalCache.getUsers([versions[i][1]],(function (node,id) {
+				return function(cb) {
+					node.appendChild(document.createTextNode(cb[id].display_name));	
+				};	
+			})(versionsecond.getElementsByTagName("td")[1],versions[i][1]));
+			versioncommentbody.appendChild(versionsecond);						
+			
+			
+			if(versions[i][6]) {
+				var versionsecond=attachmentsecond.cloneNode(true);
+				versionsecond.getElementsByTagName("td")[0].appendChild(document.createTextNode(_("Comment:")));
+				versioncommentbody.appendChild(versionsecond);	
+				var versionthird=attachmentthird.cloneNode(true);
+				versionthird.getElementsByTagName("td")[0].appendChild(getDivforTextContent(versions[i][6],null,true));
+				versioncommentbody.appendChild(versionthird);
+			}
+			Hover.accordion.addComponent("VersionComment_"+i,versioncommentnode,150);
+			Hover.references.allVersionComments["VersionComment_"+i]= { active : false };
+		}
+	});	
+}
+OXInfostoreHover.fillGeneral = function() {
+	function fillContent(type,value,titletext,clear,show) {
+		if(clear) { removeChildNodes(OXInfostoreHover.references[type]); }
+		if(value) { OXInfostoreHover.references[type].appendChild(value); }
+		if(titletext) { OXInfostoreHover.references[type].title=titletext; }
+		if(show) { OXInfostoreHover.references[type].style.display=""; }
+	}
+	function fillText(type,text,titletext,clear) {
+		if(clear) { removeChildNodes(OXInfostoreHover.references[type]); }
+		if(text) { OXInfostoreHover.references[type].appendChild(document.createTextNode(text)); }
+		if(titletext) { OXInfostoreHover.references[type].title=titletext; }
+	}
+	var object=OXInfostoreHover.actualobject;
+	//TITLE
+	fillText("title",object.title ? object.title : "",object.title ? object.title : "",true);
+	
+	if (object.created_by) {
+		internalCache.getUsers([object.created_by],function(response) {
+			try {
+				var created_by = response[object.created_by].display_name || "";
+				var created_on = formatDate(object.creation_date, "datetime") || "";
+                //#. %1$s is the creation date.
+                //#. %2$s is the name of the creator.
+                //#, c-format
+				var txt = format(_("Created on %1$s by %2$s"), [created_on, created_by]);
+				fillText("created_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		fillText("created_by", "", "",true);
+	}
+	
+	if (object.modified_by) {
+		internalCache.getUsers([object.modified_by],function(response) {
+			try {
+				var changed_by = response[object.modified_by].display_name || "";
+				var changed_on = formatDate(object.last_modified, "datetime") || "";
+                //#. %1$s is the last modification date.
+                //#. %2$s is the name of the last editor.
+                //#, c-format
+				var txt = format(_("Last changed on %1$s by %2$s"), [changed_on, changed_by]);
+				fillText("changed_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		fillText("changed_by", "", "",true);
+	}
+	
+	// CATEGORIES
+	if (object.categories && object.categories.length) {
+		var node = newnode("div");
+		var cat = object.categories;
+		if (Object.prototype.toString.call(cat) == "[object Array]") {
+			 cat = cat.join(", ");
+		}
+		ox.categories.ui.drawCategoriesList(ox.categories.getByString(cat), node);		
+		fillContent("categories",node,null,true,true);
+		OXInfostoreHover.references["categories"].parentNode.style.display="";
+	} else {
+		removeChildNodes(OXInfostoreHover.references["categories"]);
+		OXInfostoreHover.references["categories"].parentNode.style.display="none";
+	}
+	
+	fillContent("coreimg", undefined, undefined, true, false);
+	var count=0;
+	//LOCKED
+	if(object.locked_until && object.locked_until != 0) {
+		actcount=count;
+		internalCache.getUsers([object.modified_by],function(reply) {
+			fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/folder/document_locked.gif")},[]),_("locked by")+" "+reply[object.modified_by].display_name,false,true);			
+		});
+		count++;
+	}
+	//FLAGS
+	if (object.color_label && object.color_label!=0) {
+		fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/menu/tag_"+object["color_label"]+".gif")},[]),null,false,true);
+		count++;
+	}
+	//ATTACHMENT
+	if (object.filename && object.filename!="") {
+		OXInfostoreHover.references["attachment"].parentNode.style.display="";
+		OXInfostoreHover.references["attachment"].colSpan=count+2 || 2;		
+		var filemimetype=getMimeImage(object.file_mimetype);
+		fillText("attachment_version",_("Nr:")+" "+object.version,"",true);
+		OXInfostoreHover.references["attachment_mimetype"].getElementsByTagName("img")[0].src=filemimetype; 
+		OXInfostoreHover.references["attachment_mimetype"].getElementsByTagName("img")[0].title=object.file_mimetype;
+		fillContent("attachment_openfile",newnode("img",{},{src:getFullImgSrc("img/menu/attachment_open.gif")},[]),_("Open attachment"),true,true);
+		addDOMEvent(OXInfostoreHover.references["attachment_openfile"].getElementsByTagName("img")[0],"click",OXInfostoreHover.openAttachedFile(object.id,object.filename));
+		fillContent("attachment_savefile",newnode("img",{},{src:getFullImgSrc("img/menu/attachment_save.gif")},[]),_("Save attachment"),true,true);
+		addDOMEvent(OXInfostoreHover.references["attachment_savefile"].getElementsByTagName("img")[0],"click",OXInfostoreHover.saveAttachedFile(object.id,object.filename));
+		fillText("attachment_filename",object.filename,object.version_comment,true);
+	} else {
+		OXInfostoreHover.references["attachment"].parentNode.style.display="none";
+	}
+	OXInfostoreHover.references["coreimg"].style.width = (count*20) + "px";
+	//URL
+	if(object.url && object.url!="") {
+		OXInfostoreHover.references["url"].parentNode.style.display="";
+		fillContent("url",newnode("a",{},{ href: object.url , target:"_blank" },[document.createTextNode(object.url)]),null,true,true);
+	} else {
+		OXInfostoreHover.references["url"].parentNode.style.display="none";
+	}
+	//NOTE
+	if(!object.description) { object.description="" }
+	fillContent("notefull", getDivforTextContent(object.description),null,true);
+
+    // Actions
+	updateHoverActions(OXInfostoreHover);
+}
+OXInfostoreHover.openAttachedFile = function(id,filename,version) {
+	return function() {
+		var sURL = AjaxRoot + "/infostore/" + encodeURIComponent(filename)
+				+ "?action=document&session=" + session 
+				+ "&id=" + encodeURIComponent(id)
+		if (version) {
+			sURL=sURL+"&version="+version;
+		}
+		newWindow(sURL,"width=780px,height=640px,left=50,top=50,resizable=yes,menubar=no,toolbar=no,status=no,scrollbars=yes");
+	}
+}
+OXInfostoreHover.saveAttachedFile = function(id,filename,version) {
+	return function() {
+		var sContentType = 'application/octet-stream';	
+		var sURL = AjaxRoot + '/infostore/' 
+					+ encodeURIComponent(filename) 
+					+ '?action=document&session=' + session
+					+ '&content_type=' + encodeURIComponent(sContentType) 
+					+ '&id=' + encodeURIComponent(id);
+		if (version) { 
+			sURL=sURL+"&version="+version; 
+		}
+		var frame = $ALL("dlIframe") ? getFrameElement('dlIframe') : parent.frames['dlIframe'];
+		frame.location.href = sURL;
+	}
+}
+function OXAppointmentHover() {}
+OXAppointmentHover.actualmodule="calendar";
+OXAppointmentHover.moduleint=1;
+OXAppointmentHover.contentobject;
+OXAppointmentHover.actualobject;
+OXAppointmentHover.confirmdialogshown=false;
+OXAppointmentHover.references=new Object();
+OXAppointmentHover.references.allGroups=new Array();
+OXAppointmentHover.references.allGroupsParticipants=new Object();
+OXAppointmentHover.fillOthers = function() {
+	var othersmain=OXAppointmentHover.references["core_others_template"].cloneNode(true);
+	othersmain.id += ++OXGroupwareHover.uid;
+	ox.api.folder.getPathString({
+	    folder: OXAppointmentHover.actualobject.folder_id,
+	    success: function (resp) {
+		    othersmain.getElementsByTagName("td")[3].appendChild(document.createTextNode(resp));
+	    }
+	});
+	internalCache.getUsers([OXAppointmentHover.actualobject.modified_by],function(response) {
+		othersmain.getElementsByTagName("td")[11].appendChild(document.createTextNode(response[OXAppointmentHover.actualobject.modified_by].display_name || ""));		
+	});
+	internalCache.getUsers([OXAppointmentHover.actualobject.created_by],function(response) {
+		othersmain.getElementsByTagName("td")[7].appendChild(document.createTextNode(response[OXAppointmentHover.actualobject.created_by].display_name || ""));		
+	});
+		
+	OXAppointmentHover.accordion.addComponent("AppointmentOthers",othersmain,false);
+}
+OXAppointmentHover.accordion=null;
+OXAppointmentHover.actualHover=null;
+OXAppointmentHover.actualobject=null;
+OXAppointmentHover.getContent = function() {
+	if(OXAppointmentHover.contentobject) { 
+		return OXAppointmentHover.contentobject;
+	}
+	var element=createHoverContent(null,null,null,null,4);
+	OXAppointmentHover.accordion=new Accordion(450,400);
+	refillImages("template_calendar_hover_page1");
+	refillImages("template_calendar_hover_attachments");
+	refillImages("template_calendar_hover_others");
+	var contentnode=$("template_calendar_hover_page1");
+	OXAppointmentHover.references["core"]=contentnode;
+	OXAppointmentHover.accordion.addComponent("AppointmentCore",contentnode,false);
+	
+	OXAppointmentHover.references["core_content_full"]=OXGroupwareHover.references["core_content_full"].cloneNode(true);
+	OXAppointmentHover.references["core_content_full"].id += "-calendar";
+	OXAppointmentHover.accordion.addComponent("NoteFull",OXAppointmentHover.references["core_content_full"],150);
+	var tmptds=OXAppointmentHover.references["core_content_full"].getElementsByTagName("td");
+	OXAppointmentHover.references["notefull"]=tmptds[0];
+	
+	var tmptds=OXAppointmentHover.references["core"].getElementsByTagName("td");
+	OXAppointmentHover.references["title"]=tmptds[1];
+	OXAppointmentHover.references["coreimg"]=tmptds[2];
+	OXAppointmentHover.references["location"]=tmptds[3];
+	OXAppointmentHover.references["start_time"]=tmptds[5];
+	OXAppointmentHover.references["end_time"]=tmptds[7];
+	OXAppointmentHover.references["categories"]=tmptds[8];
+	OXAppointmentHover.references["created_by"]=tmptds[9];
+	OXAppointmentHover.references["changed_by"]=tmptds[10];
+	OXAppointmentHover.references["organizer"]=tmptds[12];
+	
+	var contentnode=$("template_calendar_hover_others");
+	OXAppointmentHover.references["core_others_template"]=contentnode;
+	OXAppointmentHover.accordion.addComponent("AppointmentOthers",contentnode,false);
+    
+    addHoverActions(OXAppointmentHover, function() {
+        ox.calendar.ui.edit(OXAppointmentHover.actualobject);
+    }, function() {
+        var object = OXAppointmentHover.actualobject;
+        var folder = object.folder || object.folder_id;
+        deleteAppointment([object], function() {
+            if (ox.api.config.get("modules.portal.module") === true) {
+                oPortal.refresh();
+            }
+        });
+    });
+    
+	var tabs = new Tabbing("4");
+	tabs.addTab(
+			new Tab("general", _("General"), 
+				function() { 
+                    OXAppointmentHover.accordion.showContent(
+                        "AppointmentCore,NoteFull,Actions");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("participants", _("Participants"),
+				function() { 
+			 		var tmpstring=OXOperationHover.getParticipantsString(OXAppointmentHover);
+			 		OXAppointmentHover.accordion.showContent(tmpstring);
+			 		// re-position of old group/participant state if switching back to this tab
+					for (var i in OXAppointmentHover.references.allGroupsParticipants) {
+		        		var group = OXAppointmentHover.references.allGroupsParticipants[i];
+		        		if (group.active) {
+		        			OXAppointmentHover.accordion.showExtraContent(i);
+		        		}		        		
+		        	}
+				}
+			)
+	);
+	if (corewindow.ox.upsell.isVisible("infostore") && corewindow.ox.upsell.isVisible("calendar-attachments")) {
+    	tabs.addTab(
+    			new Tab("attachments", _("Attachments"),
+    				function() { 
+    			 		OXAppointmentHover.accordion.showContent("Attachments");
+    				}
+    			)
+    	);
+	}
+	tabs.addTab(
+			new Tab("others", _("Others"),
+				function() { 
+					OXAppointmentHover.accordion.showContent("AppointmentOthers");
+				}
+			)
+	);
+	
+	OXAppointmentHover.slider = tabs;
+	
+	var node = OXAppointmentHover.accordion.getDomNode();
+	var d = newnode("div",{ padding:"0px" , overflow:"hidden"},{className : "tabbing_tab"},[
+		newnode("table",{ height : "22px "},{cellPadding : 0, cellSpacing : 0, border : 0, width : "100%"},[
+			newnode("tbody", {}, {}, [tabs.getDOMNode()])
+		])
+	]);
+	
+	element.body.appendChild(d);
+	element.body.appendChild(node);
+	element.node.display="none";
+	body.appendChild(element.node);
+	OXAppointmentHover.contentobject = element;
+	
+	return OXAppointmentHover.contentobject;
+}
+
+OXAppointmentHover.fillContent = function(type,value,titletext,clear,show) {
+	if(clear) { removeChildNodes(OXAppointmentHover.references[type]); }
+	if(value) { OXAppointmentHover.references[type].appendChild(value); }
+	if(titletext) { OXAppointmentHover.references[type].title=titletext; }
+	if(show) { OXAppointmentHover.references[type].style.display=""; }
+}
+OXAppointmentHover.fillText = function(type,text,titletext,clear) {
+	if(clear) { removeChildNodes(OXAppointmentHover.references[type]); }
+	if(text) { OXAppointmentHover.references[type].appendChild(document.createTextNode(text)); }
+	if(titletext) { OXAppointmentHover.references[type].title=titletext; }
+}
+
+OXAppointmentHover.refillContent = function(id, folder, recurrence_position) {
+	// can't use the oxcache here as there are bugs on the backend right now ... 
+	// e.g. field 104 is always null :-|
+	/*
+	var collection={};
+    collection.objects = [ OXCalendarMapping.createKeyFromObject( { module: "calendar", folder_id: folder, id: id, recurrence_position: (recurrence_position || 0) } )];
+    collection.columns = null;
+    OXAppointmentHover.oxCacheRequest = OXCache.newRequest(null, "calendar", collection, null,
+	    function(daten) {
+	        if (daten.objects[0]) {	        	
+				OXAppointmentHover.actualobject = daten.objects[0];
+				OXAppointmentHover.drawContent(OXAppointmentHover.actualobject);				
+	        }           
+	    }, true
+    );
+    */
+	var reqstr=AjaxRoot + "/calendar?action=get&session=" + session +"&id="+ id + "&folder="+folder;
+	if(recurrence_position) { reqstr+="&recurrence_position="+recurrence_position; }
+	(new JSONX()).get(reqstr,null,function(object) {
+		OXAppointmentHover.actualobject = object.data;
+		OXAppointmentHover.drawContent(OXAppointmentHover.actualobject);
+	});
+	
+}
+
+OXAppointmentHover.refillContentByObject = function(object) {
+	OXAppointmentHover.actualobject=object;
+	OXAppointmentHover.drawContent(object);
+}
+
+OXAppointmentHover.drawContent = function(object) {
+	//TITLE
+	OXAppointmentHover.fillText("title",object.title ? object.title : "",object.title ? object.title : "",true);
+	OXAppointmentHover.fillContent("coreimg", null, null, true, false);
+	var count=0;
+	//PRIVATE FLAG OR GROUP APPOINTMENT
+	if(object.private_flag) {
+		OXAppointmentHover.fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/private_flag.gif"), align: "right" },[]),_("Private appointment"),false,true); /*i18n*/
+		count++;
+	} else if(object.participants && object.participants.length>1) {
+		OXAppointmentHover.fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/calendar/group.gif"), align: "right"},[]),_("Group appointment"),false,true); /*i18n*/
+		count++;
+	}
+	//RECURRENCE APPOINTMENT
+	if(object.recurrence_type && object.recurrence_type != 0) {
+		OXAppointmentHover.fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/calendar/calendar_series.gif"), align: "right"},[]),_("Recurring appointment"),false,true); /*i18n*/
+		count++;
+	}
+	//FLAGS
+	if(object.color_label && object.color_label!=0) {
+		OXAppointmentHover.fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/menu/tag_"+object["color_label"]+".gif"), align: "right"},[]),null,false,true);
+		count++;
+	}
+	OXAppointmentHover.references["coreimg"].style.width = (count*20) + "px";
+	//LOCATION
+	OXAppointmentHover.fillText("location",object.location ? object.location : "",object.location ? object.location : "",true);
+	var startdate=new Date(object.start_date);
+	var enddate=new Date(object.end_date);
+	
+	//DATE AND TIME
+	if(object.full_time) {
+		enddate.setUTCDate(enddate.getUTCDate()-1);
+		OXAppointmentHover.fillText("start_time", formatDate(startdate,"date"),formatDate(startdate,"date"),true);
+		OXAppointmentHover.fillText("end_time", formatDate(enddate,"date"),formatDate(enddate,"date"),true);
+	} else {
+		OXAppointmentHover.fillText("start_time", formatDate(startdate,"datetime"),formatDate(startdate,"datetime"),true);
+		OXAppointmentHover.fillText("end_time", formatDate(enddate,"datetime"),formatDate(enddate,"datetime"),true);
+	}
+	
+	if (OXAppointmentHover.actualobject.created_by) {
+		internalCache.getUsers([OXAppointmentHover.actualobject.created_by],function(response) {
+			try {
+				var created_by = response[OXAppointmentHover.actualobject.created_by].display_name || "";
+				var created_on = formatDate(OXAppointmentHover.actualobject.creation_date, "datetime") || "";
+				var txt = "";
+				if (!OXAppointmentHover.actualobject.creation_date) {
+                    //#. %s is the name of the creator.
+                    //#, c-format
+					txt = format(_("Created by %s"), [created_by]);
+				} else {
+                    //#. %1$s is the creation date.
+                    //#. %2$s is the name of the creator.
+                    //#, c-format
+					txt = format(_("Created on %1$s by %2$s"), [created_on, created_by]);
+				}
+				OXAppointmentHover.fillText("created_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		OXAppointmentHover.fillText("created_by", "", "",true);
+	}
+	
+	if (OXAppointmentHover.actualobject.organizer !== undefined 
+	        && OXAppointmentHover.actualobject.organizer !== "") {
+	    OXAppointmentHover.references["organizer"].parentNode.style.display="";
+	    if (OXAppointmentHover.actualobject.organizerId !== 0) {
+	        internalCache.getUsers([OXAppointmentHover.actualobject.organizerId],function(response) {
+	            try {
+	                var organizer = response[OXAppointmentHover.actualobject.organizerId].display_name || "";
+	                var node = newnode("div", 0, 0, [
+                         newnode("img", { paddingRight: "5px" }, { align: "absmiddle", src: getFullImgSrc("img/calendar/user.gif") }),
+                         newtext(organizer)
+                    ]);
+	                OXAppointmentHover.fillContent("organizer", node, null, true, true);
+	            } catch(n) { }
+	        });
+	    } else {
+	        var organizer = OXAppointmentHover.actualobject.organizer;
+            var node = newnode("div", 0, 0, [
+                 newnode("img", { paddingRight: "5px" }, { align: "absmiddle", src: getFullImgSrc("img/calendar/user_extern.gif") }),
+                 newtext(organizer)
+            ]);
+            OXAppointmentHover.fillContent("organizer", node, null, true, true);
+	    }
+	} else {
+	    OXAppointmentHover.references["organizer"].parentNode.style.display="none";
+	}
+	
+	if (OXAppointmentHover.actualobject.modified_by) {
+		internalCache.getUsers([OXAppointmentHover.actualobject.modified_by],function(response) {
+			try {
+				var changed_by = response[OXAppointmentHover.actualobject.modified_by].display_name || "";
+				var changed_on = formatDate(OXAppointmentHover.actualobject.last_modified, "datetime") || "";
+				//#. %1$s is the last modification date.
+				//#. %2$s is the name of the last editor.
+                //#, c-format
+				var txt = format(_("Last changed on %1$s by %2$s"), [changed_on, changed_by]);
+				OXAppointmentHover.fillText("changed_by", txt, txt, true);	
+			} catch(n) {}
+		});
+	} else {
+		OXAppointmentHover.fillText("changed_by", "", "",true);
+	}
+	
+	// CATEGORIES
+	if (OXAppointmentHover.actualobject.categories) {
+		var node = newnode("div");
+		ox.categories.ui.drawCategoriesList(ox.categories.getByString(OXAppointmentHover.actualobject.categories), node);		
+		OXAppointmentHover.fillContent("categories",node,null,true,true);
+		OXAppointmentHover.references["categories"].parentNode.style.display="";
+	} else {
+		removeChildNodes(OXAppointmentHover.references["categories"]);
+		OXAppointmentHover.references["categories"].parentNode.style.display="none";
+	}
+	
+	// NOTE
+	if (!object.note) { 
+		object.note = "";
+	}
+	OXAppointmentHover.fillContent("notefull", getDivforTextContent(object.note),null,true);
+	
+	// Actions
+	updateHoverActions(OXAppointmentHover);
+	
+	if (OXAppointmentHover.actualobject.participants && OXAppointmentHover.actualobject.participants.length) {
+		OXAppointmentHover.slider.getTabById("participants").setTitle(_("Participants") + " ("+OXAppointmentHover.actualobject.participants.length+")");	
+		OXOperationHover.fillParticipants(OXAppointmentHover);
+	}
+		
+	if (OXAppointmentHover.actualobject.folder_id && OXAppointmentHover.actualobject.id) {
+	    if (OXAppointmentHover.slider.getTabById("attachments") !== null) {
+	        OXAppointmentHover.slider.getTabById("attachments").setTitle(_("Attachments") + " (0)");
+	    }
+		OXGroupwareHover.fillAttachments(OXAppointmentHover);
+		OXAppointmentHover.fillOthers();
+	}
+	
+	OXAppointmentHover.accordion.checkComponentHeight("AppointmentCore");
+	OXAppointmentHover.accordion.checkComponentHeight("NoteFull");
+	OXAppointmentHover.accordion.checkComponentHeight("Actions");
+	OXAppointmentHover.slider.selectTabById("general");
+	
+}
+
+
+register("Loaded",function() {
+	OXGroupwareHover.start();
+	OXOperationHover.start();
+	OXContactHover.start();	
+})
+
+function OXMailHover() {}
+OXMailHover.actualmodule="mail";
+OXMailHover.moduleint=19;
+OXMailHover.contentobject;
+OXMailHover.actualobject;
+OXMailHover.actualHover=null;
+OXMailHover.accordion;
+OXMailHover.references=new Object();
+
+OXMailHover.getContent = function() {
+	if(OXMailHover.contentobject) {
+		return OXMailHover.contentobject;
+	}
+	var element=createHoverContent(null,null,null,null,5);
+	OXMailHover.accordion=new Accordion(450,400);
+	
+	refillImages("template_mail_hover_page1");
+	var contentnode=$("template_mail_hover_page1");
+	OXMailHover.references["core"]=contentnode;
+	OXMailHover.accordion.addComponent("Mail_General",contentnode,false);
+		
+	var tmptds=OXMailHover.references["core"].getElementsByTagName("td");
+	OXMailHover.references["subject"]=tmptds[1];
+	OXMailHover.references["coreimg"]=tmptds[2];
+	OXMailHover.references["from"]=tmptds[3];
+	
+	OXMailHover.references["core_content_full"]=OXGroupwareHover.references["core_content_full"].cloneNode(true);
+	OXMailHover.references["core_content_full"].id += "-mail";
+	OXMailHover.accordion.addComponent("Mail_MailText_Full",OXMailHover.references["core_content_full"],150);
+	var tmptds=OXMailHover.references["core_content_full"].getElementsByTagName("td");
+	OXMailHover.references["mailtextfull"]=tmptds[0];
+    
+    refillImages("template_mail_hover_actions");
+    var actions = $("template_mail_hover_actions");
+    var spans = jQuery(actions).find("div.menu-item");
+    if (IE === 7) {
+        jQuery(spans).addClass("ie7");
+    }
+    OXMailHover.references.mailActionDelete = spans[3];
+    OXMailHover.references.mailActionSpam = spans[4];
+    OXMailHover.references.mailActionHam = spans[5];
+	OXMailHover.accordion.addComponent("Mail_Actions", actions);
+	function getParams(message) {
+	    try {
+    	    var params = {};
+        	// set account id if available
+            if ("account_id" in message) {
+                // is an existing account?
+                if (ox.api.cache.account.get(message.account_id) !== undefined) {
+                    params.account = message.account_id;
+                }
+            }
+            return params;
+	    } catch (e) {
+	        // ignored
+	    } finally {
+	        params = message = null;
+	    }
+	}
+    var action_callbacks = [function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        ox.api.mail.reply({ message: OXMailHover.actualobject,
+            params: getParams(OXMailHover.actualobject) });
+        closeHover();
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        ox.api.mail.replyAll({ message: OXMailHover.actualobject,
+            params: getParams(OXMailHover.actualobject) });
+        closeHover();
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        ox.api.mail.forward({ message: OXMailHover.actualobject,
+            params: getParams(OXMailHover.actualobject) });
+        closeHover();
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        var mail = OXMailHover.actualobject;
+        var folder = mail.folder || mail.folder_id;
+        if (   configGetKey("mail.deletemail")
+            || configGetKey("mail.folder.trash") == folder)
+        {
+            newConfirm(_("Delete E-Mail"),
+                _('Are you sure you want to delete this E-Mail?'),
+                AlertPopup.YESNO, null, null,
+                function () { OXMailMapping.deleteObjects([mail], true, cb); },
+                null);
+        } else {
+            OXMailMapping.deleteObjects([mail], false, cb);
+        }
+        function cb() {
+            ox.api.folder.refresh({ folders: [folder] });
+            closeHover();
+        }
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        OXMailMapping.setMailFlags("spam",
+            [OXMailMapping.createKeyFromObject(OXMailHover.actualobject)],
+            closeHover);
+    }, function() {
+        jQuery(this).toggleClass("menu-item-over", false);
+        OXMailMapping.setMailFlags("ham",
+            [OXMailMapping.createKeyFromObject(OXMailHover.actualobject)],
+            closeHover);
+    }];
+    OXMailHover.hide = function() { this.accordion.hover.reset(); };
+    function closeHover() {
+        OXMailHover.hide();
+        if (ox.api.config.get("modules.portal.module") === true) {
+            oPortal.refresh();
+        }
+    }
+    spans.each(function(i) {
+        jQuery(this).click(action_callbacks[i]).mouseenter(function(e) {
+            jQuery(this).toggleClass("menu-item-over", true);
+        }).mouseleave(function(e) {
+            jQuery(this).toggleClass("menu-item-over", false);
+        });
+    });
+    
+	var tabs = new Tabbing("5");
+	tabs.addTab(
+			new Tab("general", _("General"), 
+				function() { 
+                    OXMailHover.accordion.showContent(
+                        "Mail_General,Mail_MailText_Full,Mail_Actions");
+				}
+			)
+	);
+	tabs.addTab(
+			new Tab("attachments", _("Attachments"),
+				function() { 
+					OXMailHover.accordion.showContent("Attachments")
+				}
+			)
+	);
+	
+	OXMailHover.slider = tabs;
+	
+	var node = OXMailHover.accordion.getDomNode();
+	var d = newnode("div",{ padding:"0px" , overflow:"hidden"},{className : "tabbing_tab"},[
+		newnode("table",{ height : "22px "},{cellPadding : 0, cellSpacing : 0, border : 0, width : "100%"},[
+			newnode("tbody", {}, {}, [tabs.getDOMNode()])
+		])
+	]);
+	
+	element.body.appendChild(d);
+	element.body.appendChild(node);
+	element.node.display="none";
+	body.appendChild(element.node);
+	OXMailHover.contentobject = element;
+	
+	return OXMailHover.contentobject;
+}
+
+OXMailHover.refillContent = function(id,folder) {
+	var collection={};
+    collection.objects=collection.objects=[OXMailMapping.createKeyFromObject({"module" : "mail" ,"folder_id" : folder, id : id})];;
+    collection.columns=OXMailMapping.GETPLAIN;
+    // bug #18519 - we need the html parts as well to get 
+    // a correct attachment counter
+    collection.columns.push("attachments_plain"); 
+    
+    /*
+     * adding field unseen to collection which indicates that the server
+     * shouldn't flag the message as seen. this is only required when requesting
+     * hover information. see also bug #11894
+     */
+    collection.columns.push("unseen");
+
+    OXMailHover.oxCacheRequest=OXCache.newRequest(null,"mail",collection,null,
+    function(daten) {
+        if(daten.objects[0]) {
+	        OXMailHover.actualobject=daten.objects[0];
+	        OXMailHover.actualobject.id=id;
+	        OXMailHover.actualobject.folder_id=folder;
+	        OXMailHover.fillGeneral();
+	        OXMailHover.accordion.checkComponentHeight("Mail_General");
+	        OXMailHover.accordion.checkComponentHeight("Mail_MailText_Full");
+            OXMailHover.accordion.checkComponentHeight("Mail_Actions");
+
+			OXMailHover.slider.getTabById("attachments").setTitle(_("Attachments") + " (0)");
+	        OXMailHover.fillAttachments(OXMailHover);
+			OXMailHover.slider.selectTabById("general");
+        }           
+    });
+};
+
+OXMailHover.getMailTextandStatus =function(object) {
+	var retobj=new Object();
+	retobj.mailtextstatus="notext";
+	retobj.mailtext=_("No text");
+	for (var i = 0; i < object["attachments_plain"].length; i++) {
+		var part = object["attachments_plain"][i];
+		if (part.disp == "attachment") continue;
+		switch (part.content_type.toLowerCase()) {
+			case "text/plain": 
+				retobj.mailtextstatus="text"; 
+				retobj.mailtext=part.content;
+				return retobj;
+			case "text/html": 
+				retobj.mailtextstatus="html"; 
+				retobj.mailtext=_("HTML-only mail"); 
+				break;
+		}
+	}
+	return retobj;	
+};
+
+OXMailHover.fillGeneral = function() {
+	function fillContent(type,value,titletext,clear,show) {
+		if(clear) { removeChildNodes(OXMailHover.references[type]); }
+		if(value) { OXMailHover.references[type].appendChild(value); }
+		if(titletext) { OXMailHover.references[type].title=titletext; }
+		if(show) { OXMailHover.references[type].style.display=""; }
+	}
+	function fillText(type,text,titletext,clear) {
+		if(clear) { removeChildNodes(OXMailHover.references[type]); }
+		if(text) { OXMailHover.references[type].appendChild(document.createTextNode(text)); }
+		if(titletext) { OXMailHover.references[type].title=titletext; }
+	}
+	object=OXMailHover.actualobject;
+	fillText("subject",object.subject ? object.subject : "",object.subject ? object.subject : "",true);
+	//FROM
+	fillText("from",object.from ? getAdressString(object.from,true): "",object.from ?  getAdressString(object.from,false) : "",true);
+
+	fillContent("coreimg", null, null, true, false);
+	var count = 0;
+	
+	//MAIL FLAGS
+	if(object.flags || object.flags==0) {
+		var img=getFullImgSrc("img/mail/unread.gif");
+		var imgtitle="Unread";
+		if(object.flags) {
+			if(object.flags % 2 >= 1) {
+				img=getFullImgSrc("img/mail/reply.gif"); 
+				imgtitle="Answered"; 
+			} else if(object.flags % 64 >= 32) {
+				img=getFullImgSrc("img/mail/read.gif"); 
+				imgtitle="Read"; 
+			}
+		}
+		fillContent("coreimg",newnode("img",{},{ src: img , title : _(imgtitle), align: "right" },[]),null,false,true);
+		count++;
+	}
+	//PRIORITY
+	if(object.priority && object.priority!=3) {
+		var img=getFullImgSrc("img/dummy.gif");
+		var imgtitle=_("Unknown"); /*i18n*/
+		switch(object.priority) {
+			case 1: img=getFullImgSrc("img/mail/email_priohigh.gif"); imgtitle=_("Very high") /*i18n*/ ;break;
+			case 2: img=getFullImgSrc("img/mail/email_priohigh.gif"); imgtitle=_("High") /*i18n*/ ;break;
+			case 4: img=getFullImgSrc("img/mail/email_priolow.gif"); imgtitle=_("Low") /*i18n*/ ;break;
+			case 5: img=getFullImgSrc("img/mail/email_priolow.gif"); imgtitle=_("Very low") /*i18n*/ ;break;
+		}
+		fillContent("coreimg",newnode("img",{},{ src: img , title : imgtitle, align: "right" },[]),null,false,true);
+		count ++;
+	}
+	//COLOR_LABEL
+	if(object.color_label && object.color_label!=0) {
+		fillContent("coreimg",newnode("img",{},{ src: getFullImgSrc("img/menu/tag_"+object["color_label"]+".gif"), align: "right" },[]),null,false,true);
+		count++;
+	}
+	
+	OXMailHover.references["coreimg"].style.width = (count*20) + "px";
+	
+	// MAIL TEXT
+	var mailtextobj=OXMailHover.getMailTextandStatus(object);
+	fillContent("mailtextfull", parseDirectLinksInMails(getDivforMailContent(mailtextobj.mailtext.split(/<br\s*\/?>/).join('<br>'))),"",true,true);	
+
+    // Actions
+	menuhasRightandLoad([OXMailHover.actualobject], "DELETE", function(can) {
+	    jQuery(OXMailHover.references.mailActionDelete).toggle(can);
+    });
+	var folder = OXMailHover.actualobject.folder ||
+	             OXMailHover.actualobject.folder_id;
+	jQuery(OXMailHover.references.mailActionSpam).toggle(
+	    configGetKey("mail.spambutton") &&
+	    folder != configGetKey("mail.folder.spam") &&
+	    getMailAccountIdByFolder(folder) == 0);
+    jQuery(OXMailHover.references.mailActionHam).toggle(
+        configGetKey("mail.spambutton") &&
+        folder == configGetKey("mail.folder.spam") &&
+        getMailAccountIdByFolder(folder) == 0);
+}
+OXMailHover.fillAttachments = function(Hover) {
+	var attachmentCounterForTab = 0;
+	var attachmentfirst=
+	newnode("tr",{},{},[
+		newnode("td",{ width: "25px", paddingTop:"12px", lineHeight : "0px"},{ className : "notclickable"},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]) 
+		]),
+		newnode("td",{ paddingTop:"12px"},{ className : "contenttext notclickable"},[]),
+		newnode("td",{ width: "25px", paddingTop:"12px" , lineHeight : "0px"},{},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]),
+			newnode("img",{ display:"none" },{ src: getFullImgSrc("img/menu/attachment_open.gif") , className : "clickable"},[])
+		]),
+		newnode("td",{ width: "25px", paddingTop:"12px" , lineHeight : "0px"},{},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[]),
+			newnode("img",{ display:"none" },{ src: getFullImgSrc("img/menu/attachment_save.gif") , className : "clickable"},[])
+		])
+	]);
+	var attachmentsecond=
+	newnode("tr",{},{},[
+		newnode("td",{ width: "25px"},{ className : "notclickable"},[
+			newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[])
+		]),
+		newnode("td",{},{ className : "contenttext notclickable"},[]),
+		newnode("td",{ width: "25px"},{ className : "notclickable" },[]),
+		newnode("td",{ width: "25px"},{ className : "notclickable" },[])
+	]);
+	
+	var hasAttachments=false;
+	var object=Hover.actualobject;
+	var attachmentmain=OXGroupwareHover.references["core_attachments_template"].cloneNode(true);
+	attachmentmain.id += ++OXGroupwareHover.uid;
+	var attachbody=attachmentmain.getElementsByTagName("tbody")[0];
+	var firstHtml = false;
+	for(var i=0;i<object["attachments_plain"].length;i++) {
+		var myAttachment=object["attachments_plain"][i];
+		if (myAttachment.filename) {
+		    // as we always get both versions we have to ignore the html part unless
+		    // html messages are not allowed to match the attachment counter
+		    if (firstHtml === false && configGetKey("mail.inlineattachments") &&
+		            myAttachment.content_type.match(/text\/html/i) &&
+		            new RegExp("^Part_" + myAttachment.id || "").test(myAttachment.filename) === true) {
+		        firstHtml = true;
+		        continue;
+		    }
+			hasAttachments=true;
+			attachmentCounterForTab++;
+			var node=attachmentfirst.cloneNode(true);
+			var node2=attachmentsecond.cloneNode(true);			
+			node.getElementsByTagName("img")[0].src=getMimeImage(myAttachment.content_type.split(";")[0].toLowerCase()); 
+			node.getElementsByTagName("img")[0].title=myAttachment.content_type.split(";")[0].toLowerCase();
+			node.getElementsByTagName("td")[1].appendChild(document.createTextNode(myAttachment.filename));		
+			node.getElementsByTagName("img")[1].style.display="none";
+			node.getElementsByTagName("img")[2].style.display="";
+			node.getElementsByTagName("img")[2].title=_("Open attachment"); /*i18n*/
+			addDOMEvent(node.getElementsByTagName("img")[2],"click",Hover.openAttachedFile(Hover.actualobject.folder_id,Hover.actualobject.id,myAttachment.id));
+			node.getElementsByTagName("img")[3].style.display="none";
+			addDOMEvent(node.getElementsByTagName("img")[4],"click",Hover.saveAttachedFile(Hover.actualobject.folder_id,Hover.actualobject.id,myAttachment.id));
+			node.getElementsByTagName("img")[4].style.display="";
+			node.getElementsByTagName("img")[4].title=_("Save attachment"); /*i18n*/
+			node2.getElementsByTagName("td")[1].appendChild(document.createTextNode(OXGroupwareHover.getShortByteString(myAttachment.size)));
+			node2.getElementsByTagName("td")[1].title=OXGroupwareHover.getShortByteString(myAttachment.size,true);
+			attachbody.appendChild(node);
+			attachbody.appendChild(node2);
+		}
+	}
+    
+    for (var i = 0; object.nested_msgs && i < object.nested_msgs.length; i++) {
+        var msg = object.nested_msgs[i];
+        attachmentCounterForTab++;
+        hasAttachments = true;
+        var node = attachmentfirst.cloneNode(true);
+        var images = node.getElementsByTagName("img");
+        images[0].src = images[0].title = getFullImgSrc("img/mail/unread.gif");
+        node.getElementsByTagName("td")[1].appendChild(
+            document.createTextNode(msg.subject));
+        images[1].style.display = "none";
+        images[2].style.display = "";
+        images[2].title = _("Open attachment");
+        var nested = [msg];
+        nested.sid = object.nested_msgs.length; // yup, it's a bug
+        addDOMEvent(images[2], "click", Hover.openAttachedMail(object, nested));
+        attachbody.appendChild(node);
+    }
+    
+	if(!hasAttachments) {
+		var tmp=newnode("tr",{},{ className : "notclickable"},[
+			newnode("td",{ width: "25px"},{},[
+				newnode("img",{},{ src: getFullImgSrc("img/dummy.gif") },[])
+			]),
+			newnode("td",{},{ colspan : 4 , className : "contenttext notclickable" },[
+				document.createTextNode(_("No attachments available")) /*i18n*/
+			])		
+		]);
+		attachbody.appendChild(tmp);
+	}
+	
+	OXMailHover.slider.getTabById("attachments").setTitle(_("Attachments") + " ("+attachmentCounterForTab+")");
+	
+	Hover.accordion.addComponent("Attachments",attachmentmain,false);	
+};
+    
+OXMailHover.openAttachedMail = function(message, detailNestedMessage) {
+    return function() {
+        var detailMail=newWindow("detailMail.html#type='isNestedMessage'&id="
+            + encodeURIComponent(message.id)
+            + "&folder=" + encodeURIComponent(message.folder || message.folder_id)
+            + "&sid=" + encodeURIComponent(detailNestedMessage.sid),          
+            getWindowOptions(), 
+            { "id": encodeURIComponent(detailNestedMessage.sid), "folder": encodeURIComponent(message.folder || message.folder_id) });
+        detailMail.window.oNestedMessage = detailNestedMessage;
+        detailMail.oNestedMessage = detailNestedMessage;
+        if(detailMail)
+            detailMail.focus();
+    };
+};
+
+OXMailHover.openAttachedFile = function(folderid,objectid,attachmentid) {
+	return function() {
+		//if(rtfflag) { return; }
+		var sURL = AjaxRoot + '/mail?action=attachment&session=' + session +'&folder=' + encodeURIComponent(folderid)
+		 + '&id=' + encodeURIComponent(objectid)+ '&attachment=' +attachmentid+"&save=0";
+		newWindow(sURL, getWindowOptions());
+	}
+};
+OXMailHover.saveAttachedFile = function(folderid,objectid,attachmentid) {
+	return function() {	
+		//if(rtfflag) return;	
+		var sURL = AjaxRoot + '/mail?action=attachment&session=' + session +'&folder=' + encodeURIComponent(folderid)
+		 + '&id=' + encodeURIComponent(objectid)+ '&attachment=' +attachmentid+"&save=1";
+		var frame = $ALL("dlIframe") ? getFrameElement('dlIframe') : parent.frames['dlIframe'];
+		frame.location.href = sURL; 
+	}
+};
+
+function setHoverDelay() {
+	switch(configGetKey("gui.effects.hover.speed")) {
+		case 1: Hover.initial_delay = 500;
+			break;
+		case 2: Hover.initial_delay = 1000;
+			break;
+		case 3: Hover.initial_delay = 2000;
+			break;
+		default: Hover.initial_delay = 1000;
+			break;
+	}
+}
+register("OX_Configuration_Loaded_Complete",function() {
+	setHoverDelay();
+});
+register("OX_Configuration_Changed",function(arg) {
+	if(arg=="configuration/settings") {
+		setHoverDelay();
+	}
+});
+function getDivforTextContent(content,maxlines,removebreaks) {
+
+	var mydiv=newnode("div",{},{},[]);
+	var splited=content.split("\n");
+
+	for(var i=0;i<splited.length;i++) {
+		if(!removebreaks) { if(i!=0) { mydiv.appendChild(document.createElement("br")); } }
+		else { mydiv.appendChild(document.createTextNode(" ")); }
+		mydiv.appendChild(document.createTextNode(splited[i]));
+		if(maxlines && i>=maxlines-1) {
+			break;
+		}
+	}
+	return mydiv;
+};
+function getDivforMailContent(content) {
+	var mydiv=newnode("div",{},{},[]);
+	mydiv.innerHTML=content;
+	return mydiv;
+}

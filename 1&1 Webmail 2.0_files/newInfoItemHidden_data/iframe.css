@@ -1,0 +1,68 @@
+html, body {
+    font-family: Arial, Helvetica, sans-serif; 
+    font-size: 9pt;
+    background-color: white;
+}
+
+.plainTextContent {
+    font-family: monospace, Courier New;
+    line-height: 1.5em;
+}
+
+/* Rainbow quoting */
+
+body.colored-quotes .plainTextContent blockquote {
+	border-left: 2px solid #364e9b !important; /* blue */
+	background-color: #f5f7ff;
+    color: #1a254a !important;
+    margin-right: 0px !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote {
+    border-color: #366a9b !important; /* cyan */
+    background-color: #e6f3ff;
+    color: #1e3b56 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote {
+    border-color: #3c7027 !important; /* green */
+    background-color: #edffe6;
+    color: #192e10 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote {
+    border-color: #efc000 !important; /* orange */
+    background-color: #fffae6;
+    color: #713200 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote blockquote {
+    border-color: #5c1111 !important; /* red*/
+    background-color: #ffeeee;
+    color: #751000 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote blockquote blockquote {
+    border-color: #801062 !important; /* pink */
+    background-color: #ffeffb;
+    color: #3c072e !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote blockquote blockquote blockquote {
+    border-color: #240a4f !important; /* violet */
+    background-color: #f1e9ff;
+    color: #3a1081 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote blockquote blockquote blockquote blockquote {
+    border-color: #333 !important; /* gray */
+    background-color: #f5f5f5;
+    color: #333 !important;
+}
+
+body.colored-quotes .plainTextContent blockquote blockquote blockquote blockquote blockquote blockquote blockquote blockquote blockquote {
+    border-color: #555 !important; /* black */
+    background-color: #fff;
+    color: #111 !important;
+}
+

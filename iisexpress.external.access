@@ -1,0 +1,4 @@
+Allow external access to iis express
+
+C:\Program Files\IIS Express>netsh http add urlacl url=http://COTJBL22PZLQ1:61289/ user=FIN\conrad.reynolds
+
